@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>WhatsApp QR Scanner</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background: #f2f2f2;
+        }
+
+        .box {
+            width: 450px;
+            max-width: 95%;
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        h2 {
+            margin-top: 0;
+        }
+
+        .device {
+            background: #f7f7f7;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            word-break: break-all;
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 6px;
+            background: #25D366;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1ebe5d;
+        }
+
+        button:disabled {
+            background: #999;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin: 20px 0;
+            font-weight: bold;
+            white-space: pre-line;
+            line-height: 1.5;
+        }
+
+        .error {
+            color: #d93025;
+        }
+
+        .success {
+            color: #188038;
+        }
+
+        .connecting {
+            color: #b06000;
+        }
+
+        #qrContainer {
+            width: 350px;
+            height: 350px;
+            max-width: 100%;
+            margin: 20px auto;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+
+        #qrContainer img {
+            width: 350px;
+            height: 350px;
+            max-width: 100%;
+            object-fit: contain;
+        }
+
+        #qrContainer canvas {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        .info {
+            margin-top: 15px;
+            color: #666;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="box">
+
+    <h2>WhatsApp QR Scanner</h2>
+
+    <div class="device">
+        Device ID:
+        <strong id="deviceIdText"></strong>
+    </div>
+
+    <button id="getQrButton">
+        Get QR
+    </button>
+
+    <p id="status" class="connecting">
+        Checking login...
+    </p>
+
+    <div id="qrContainer"></div>
+
+    <div class="info">
+        Open WhatsApp on your phone.
+        <br><br>
+
+        <strong>
+            WhatsApp → Linked Devices → Link a device
+        </strong>
+
+        <br><br>
+
+        Scan the QR code above.
+    </div>
+
+</div>
+
+
+<script>
+
+    // ============================================================
+    // CONFIGURATION
+    // ============================================================
+
+    const deviceId =
+        "6a802b9a28f2a7405ba21cfb";
+
+
+    // If your HTML is served by localhost:5000,
+    // leave this empty.
+    //
+    // If HTML is running on another port, for example
+    // localhost:5500, use:
+    //
+    // const API_BASE_URL = "http://localhost:5000";
+    //
+
+    const API_BASE_URL = "";
+
+
+    // ============================================================
+    // ELEMENTS
+    // ============================================================
+
+    const deviceIdText =
+        document.getElementById("deviceIdText");
+
+    const button =
+        document.getElementById("getQrButton");
+
+    const status =
+        document.getElementById("status");
+
+    const qrContainer =
+        document.getElementById("qrContainer");
+
+
+    deviceIdText.innerText = deviceId;
+
+
+    // ============================================================
+    // STATUS POLLING
+    // ============================================================
+
+    let statusInterval = null;
+
+
+    // ============================================================
+    // GET TOKEN
+    // ============================================================
+
+    function getToken() {
+
+        const tokenNames = [
+            "token",
+            "accessToken",
+            "authToken",
+            "jwt",
+            "access_token"
+        ];
+
+
+        // localStorage
+        for (const name of tokenNames) {
+
+            const token =
+                localStorage.getItem(name);
+
+            if (
+                token &&
+                token !== "null" &&
+                token !== "undefined"
+            ) {
+
+                console.log(
+                    "Token found in localStorage:",
+                    name
+                );
+
+                return token;
+            }
+        }
+
+
+        // sessionStorage
+        for (const name of tokenNames) {
+
+            const token =
+                sessionStorage.getItem(name);
+
+            if (
+                token &&
+                token !== "null" &&
+                token !== "undefined"
+            ) {
+
+                console.log(
+                    "Token found in sessionStorage:",
+                    name
+                );
+
+                return token;
+            }
+        }
+
+
+        return null;
+    }
+
+
+    // ============================================================
+    // AUTH HEADERS
+    // ============================================================
+
+    function getAuthHeaders() {
+
+        const token = getToken();
+
+        if (!token) {
+            return null;
+        }
+
+        return {
+            "Authorization":
+                "Bearer " + token,
+
+            "Content-Type":
+                "application/json"
+        };
+    }
+
+
+    // ============================================================
+    // STATUS MESSAGE
+    // ============================================================
+
+    function showStatus(
+        message,
+        type = "connecting"
+    ) {
+
+        status.innerText = message;
+
+        status.className = type;
+    }
+
+
+    // ============================================================
+    // GET QR
+    // ============================================================
+
+    async function getQR() {
+
+        console.log("================================");
+        console.log("GET QR STARTED");
+        console.log("================================");
+
+
+        // Stop old polling
+
+        if (statusInterval) {
+
+            clearInterval(statusInterval);
+
+            statusInterval = null;
+        }
+
+
+        // Clear previous QR
+
+        qrContainer.innerHTML = "";
+
+        qrContainer.style.display = "none";
+
+
+        // Get token
+
+        const token = getToken();
+
+
+        console.log(
+            "Token available:",
+            !!token
+        );
+
+
+        if (!token) {
+
+            showStatus(
+                "❌ No login token found.\n\nPlease login first.",
+                "error"
+            );
+
+            console.error(
+                "localStorage:",
+                localStorage
+            );
+
+            return;
+        }
+
+
+        // Disable button
+
+        button.disabled = true;
+
+
+        showStatus(
+            "⏳ Connecting to WhatsApp...",
+            "connecting"
+        );
+
+
+        try {
+
+            // ====================================================
+            // URL
+            // ====================================================
+
+            const url =
+                API_BASE_URL +
+                "/api/devices/" +
+                deviceId +
+                "/qr";
+
+
+            console.log(
+                "QR API:",
+                url
+            );
+
+
+            // ====================================================
+            // HEADERS
+            // ====================================================
+
+            const headers =
+                getAuthHeaders();
+
+
+            console.log(
+                "Authorization:",
+                headers?.Authorization
+                    ? "Bearer token exists"
+                    : "MISSING"
+            );
+
+
+            // ====================================================
+            // API REQUEST
+            // ====================================================
+
+            const response =
+                await fetch(
+                    url,
+                    {
+                        method: "GET",
+
+                        headers: headers
+                    }
+                );
+
+
+            console.log(
+                "QR HTTP STATUS:",
+                response.status
+            );
+
+
+            // ====================================================
+            // RESPONSE
+            // ====================================================
+
+            const data =
+                await response.json();
+
+
+            console.log(
+                "QR RESPONSE:",
+                data
+            );
+
+
+            // ====================================================
+            // UNAUTHORIZED
+            // ====================================================
+
+            if (response.status === 401) {
+
+                showStatus(
+                    "❌ Unauthorized.\n\nLogin token is invalid or expired.\nPlease login again.",
+                    "error"
+                );
+
+                button.disabled = false;
+
+                return;
+            }
+
+
+            // ====================================================
+            // OTHER ERROR
+            // ====================================================
+
+            if (!response.ok) {
+
+                showStatus(
+                    "❌ " +
+                    (
+                        data.message ||
+                        "QR generation failed"
+                    ) +
+                    "\nHTTP " +
+                    response.status,
+                    "error"
+                );
+
+                button.disabled = false;
+
+                return;
+            }
+
+
+            // ====================================================
+            // ALREADY ONLINE
+            // ====================================================
+
+            if (
+                data.status === "Online" ||
+                data.data?.status === "Online"
+            ) {
+
+                showStatus(
+                    "✅ WhatsApp already connected.",
+                    "success"
+                );
+
+                button.disabled = false;
+
+                return;
+            }
+
+
+            // ====================================================
+            // QR NOT FOUND
+            // ====================================================
+
+            if (!data.qrCode) {
+
+                showStatus(
+                    "❌ QR code was not returned.\n\n" +
+                    (
+                        data.message ||
+                        "Try clicking Get QR again."
+                    ),
+                    "error"
+                );
+
+                button.disabled = false;
+
+                return;
+            }
+
+
+            // ====================================================
+            // QR RECEIVED
+            // ====================================================
+
+            console.log(
+                "QR received."
+            );
+
+
+            console.log(
+                "QR prefix:",
+                String(data.qrCode).substring(0, 80)
+            );
+
+
+            // ====================================================
+            // CASE 1 - IMAGE DATA URL
+            // ====================================================
+
+            if (
+                typeof data.qrCode === "string" &&
+                data.qrCode.startsWith("data:image")
+            ) {
+
+                const img =
+                    document.createElement("img");
+
+
+                img.src =
+                    data.qrCode;
+
+
+                img.alt =
+                    "WhatsApp QR Code";
+
+
+                qrContainer.appendChild(img);
+
+
+                qrContainer.style.display =
+                    "flex";
+
+
+                showStatus(
+                    "📱 Open WhatsApp → Linked Devices → Link a device → Scan the QR code.",
+                    "connecting"
+                );
+
+
+                startStatusChecking();
+
+
+                button.disabled = false;
+
+
+                return;
+            }
+
+
+            // ====================================================
+            // CASE 2 - RAW QR STRING
+            // ====================================================
+
+            if (
+                typeof QRCode === "undefined"
+            ) {
+
+                showStatus(
+                    "❌ QRCode.js failed to load.",
+                    "error"
+                );
+
+                button.disabled = false;
+
+                return;
+            }
+
+
+            new QRCode(
+                qrContainer,
+                {
+                    text:
+                        data.qrCode,
+
+                    width:
+                        350,
+
+                    height:
+                        350,
+
+                    correctLevel:
+                        QRCode.CorrectLevel.M
+                }
+            );
+
+
+            qrContainer.style.display =
+                "flex";
+
+
+            showStatus(
+                "📱 Open WhatsApp → Linked Devices → Link a device → Scan the QR code.",
+                "connecting"
+            );
+
+
+            startStatusChecking();
+
+
+            button.disabled = false;
+
+
+        } catch (error) {
+
+            console.error(
+                "QR ERROR:",
+                error
+            );
+
+
+            showStatus(
+                "❌ " + error.message,
+                "error"
+            );
+
+
+            button.disabled = false;
+        }
+    }
+
+
+    // ============================================================
+    // CHECK WHATSAPP STATUS
+    // ============================================================
+
+    function startStatusChecking() {
+
+        if (statusInterval) {
+
+            clearInterval(statusInterval);
+        }
+
+
+        console.log(
+            "Starting WhatsApp status polling..."
+        );
+
+
+        checkStatus();
+
+
+        statusInterval =
+            setInterval(
+                checkStatus,
+                3000
+            );
+    }
+
+
+    // ============================================================
+    // CHECK STATUS
+    // ============================================================
+
+    async function checkStatus() {
+
+        const headers =
+            getAuthHeaders();
+
+
+        if (!headers) {
+
+            console.error(
+                "No token for status request."
+            );
+
+            return;
+        }
+
+
+        try {
+
+            const url =
+                API_BASE_URL +
+                "/api/devices/" +
+                deviceId +
+                "/status";
+
+
+            const response =
+                await fetch(
+                    url,
+                    {
+                        method: "GET",
+                        headers: headers
+                    }
+                );
+
+
+            console.log(
+                "STATUS HTTP:",
+                response.status
+            );
+
+
+            if (response.status === 401) {
+
+                if (statusInterval) {
+
+                    clearInterval(
+                        statusInterval
+                    );
+
+                    statusInterval = null;
+                }
+
+
+                showStatus(
+                    "❌ Login expired.\nPlease login again.",
+                    "error"
+                );
+
+                return;
+            }
+
+
+            const data =
+                await response.json();
+
+
+            console.log(
+                "STATUS RESPONSE:",
+                data
+            );
+
+
+            // ====================================================
+            // ONLINE
+            // ====================================================
+
+            const currentStatus =
+                data.data?.status ||
+                data.status;
+
+
+            if (
+                currentStatus === "Online"
+            ) {
+
+                if (statusInterval) {
+
+                    clearInterval(
+                        statusInterval
+                    );
+
+                    statusInterval = null;
+                }
+
+
+                // Hide QR
+
+                qrContainer.innerHTML = "";
+
+                qrContainer.style.display =
+                    "none";
+
+
+                let message =
+                    "✅ WhatsApp Connected!";
+
+
+                const phone =
+                    data.data?.phoneNumber ||
+                    data.phone ||
+                    data.phoneNumber;
+
+
+                if (phone) {
+
+                    message +=
+                        "\nPhone: " +
+                        phone;
+                }
+
+
+                showStatus(
+                    message,
+                    "success"
+                );
+
+
+                button.disabled = false;
+
+
+                return;
+            }
+
+
+            console.log(
+                "WhatsApp status:",
+                currentStatus
+            );
+
+
+        } catch (error) {
+
+            console.error(
+                "STATUS ERROR:",
+                error
+            );
+        }
+    }
+
+
+    // ============================================================
+    // BUTTON
+    // ============================================================
+
+    button.addEventListener(
+        "click",
+        getQR
+    );
+
+
+    // ============================================================
+    // PAGE LOAD
+    // ============================================================
+
+    window.addEventListener(
+        "DOMContentLoaded",
+        function () {
+
+            console.log(
+                "Page loaded."
+            );
+
+
+            const token =
+                getToken();
+
+
+            console.log(
+                "Login token exists:",
+                !!token
+            );
+
+
+            if (!token) {
+
+                showStatus(
+                    "❌ No login token found.\n\nPlease login first.",
+                    "error"
+                );
+
+                return;
+            }
+
+
+            showStatus(
+                "✅ Login token found.\nClick Get QR.",
+                "success"
+            );
+
+        }
+    );
+
+</script>
+
+</body>
+</html>
