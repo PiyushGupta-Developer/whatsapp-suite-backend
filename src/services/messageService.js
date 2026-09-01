@@ -139,89 +139,94 @@ function resolveFile(media) {
 // CREATE BAILEYS MEDIA PAYLOAD
 // ============================================================
 
-function mediaPayload(
-  media,
-  caption
-) {
+function mediaPayload(media, caption = '') {
   if (!media) {
-    throw new Error(
-      'Invalid media attachment'
-    );
+    throw new Error('Invalid media attachment');
   }
 
   const mime = String(
     media.mimeType ||
-      media.mimetype ||
-      ''
+    media.mimetype ||
+    ''
   ).toLowerCase();
 
   const type = String(
     media.type || ''
   ).toLowerCase();
 
-  const source =
-    resolveFile(media);
+  const source = resolveFile(media);
 
   if (!source) {
-    throw new Error(
-      'Invalid media attachment'
-    );
+    throw new Error('Invalid media attachment');
   }
 
-  const base = {
-    ...source,
-  };
-
-  if (caption) {
-    base.caption = caption;
-  }
-
+  // ==========================================================
   // IMAGE
+  // ==========================================================
+
   if (
     type === 'image' ||
     mime.startsWith('image/')
   ) {
     return {
-      image: base,
+      image: source.buffer || source.url,
+      ...(caption
+        ? { caption }
+        : {}
+      ),
     };
   }
 
+  // ==========================================================
   // VIDEO
+  // ==========================================================
+
   if (
     type === 'video' ||
     mime.startsWith('video/')
   ) {
     return {
-      video: base,
+      video: source.buffer || source.url,
+      ...(caption
+        ? { caption }
+        : {}
+      ),
+      mimetype: mime || 'video/mp4',
     };
   }
 
+  // ==========================================================
   // AUDIO
+  // ==========================================================
+
   if (
     type === 'audio' ||
     mime.startsWith('audio/')
   ) {
     return {
-      audio: {
-        ...source,
-        ptt: Boolean(
-          media.ptt
-        ),
-      },
-      mimetype:
-        mime || 'audio/mpeg',
+      audio: source.buffer || source.url,
+      mimetype: mime || 'audio/mpeg',
+
+      // Voice note true ho to PTT
+      ptt: Boolean(media.ptt),
     };
   }
 
-  // DOCUMENT / PDF
+  // ==========================================================
+  // DOCUMENT
+  // ==========================================================
+
   return {
-    document: base,
+    document: source.buffer || source.url,
+
     mimetype:
       mime ||
-      'application/pdf',
+      'application/octet-stream',
+
     fileName:
       media.originalName ||
       media.filename ||
+      media.name ||
       'attachment',
   };
 }
