@@ -157,7 +157,10 @@ exports.createCampaign = async (req, res) => {
     let finalMediaFiles = Array.isArray(mediaFiles)
       ? mediaFiles
       : [];
-
+console.log("\n========== MEDIA DEBUG ==========");
+console.log("req.files:", req.files);
+console.log("req.files length:", req.files?.length || 0);
+console.log("=================================\n");
     // Direct files uploaded through Bulk API
     if (req.files && req.files.length > 0) {
       const uploadedFiles = req.files.map((file) => ({
@@ -288,7 +291,7 @@ directRecipients: list
         80
       ),
     };
-
+console.log("Final media files:", finalMediaFiles);
     const campaign = await persistCampaign(data, req);
 
     if (sendNow) {
