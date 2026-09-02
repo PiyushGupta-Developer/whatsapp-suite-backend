@@ -599,16 +599,10 @@ router.get(
 );
 
 // done
-// router.post(
-//   '/schedules',
-//   protect,
-//   h(m5.createSchedule, 'm5.scheduleCreate')
-// );
 router.post(
-  "/schedules",
+  '/schedules',
   protect,
-  media.upload.array("files", 10),
-  h(m5.createSchedule, "m5.scheduleCreate"),
+  h(m5.createSchedule, 'm5.scheduleCreate')
 );
 // done
 router.put(
