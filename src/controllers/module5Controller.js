@@ -206,7 +206,6 @@ exports.getSchedules = async (req, res) => {
 exports.createSchedule = async (req, res) => {
   try {
     await ensureM5();
-
     const {
       name,
       type,
@@ -220,241 +219,78 @@ exports.createSchedule = async (req, res) => {
       retryDelayMin,
       remindAt,
       status,
+      contactIds = [],
+      deviceIds = [],
+      mediaFiles = [],
       sendText = true,
     } = req.body;
 
-    
-    let contactIds = req.body.contactIds || [];
-
-    if (typeof contactIds === 'string') {
-      try {
-        contactIds = JSON.parse(contactIds);
-      } catch {
-        contactIds = contactIds.includes(',')
-          ? contactIds.split(',').map((id) => id.trim()).filter(Boolean)
-          : [contactIds];
-      }
-    }
-
-    if (!Array.isArray(contactIds)) {
-      contactIds = [contactIds].filter(Boolean);
-    }
-
-    
-    let deviceIds = req.body.deviceIds || [];
-
-    if (typeof deviceIds === 'string') {
-      try {
-        deviceIds = JSON.parse(deviceIds);
-      } catch {
-        deviceIds = deviceIds.includes(',')
-          ? deviceIds.split(',').map((id) => id.trim()).filter(Boolean)
-          : [deviceIds];
-      }
-    }
-
-    if (!Array.isArray(deviceIds)) {
-      deviceIds = [deviceIds].filter(Boolean);
-    }
-
-   
-    const uploadedMediaFiles = Array.isArray(req.files)
-      ? req.files.map((file) => {
-          let mediaType = 'Document';
-
-          if (file.mimetype && file.mimetype.startsWith('image/')) {
-            mediaType = 'Image';
-          } else if (file.mimetype && file.mimetype.startsWith('video/')) {
-            mediaType = 'Video';
-          }
-
-          return {
-            filename: file.filename,
-            originalName: file.originalname,
-            mimeType: file.mimetype,
-            size: file.size,
-            type: mediaType,
-            path: /uploads/${file.filename},
-          };
-        })
-      : [];
-
-    
-    let existingMediaFiles = req.body.mediaFiles || [];
-
-    if (typeof existingMediaFiles === 'string') {
-      try {
-        existingMediaFiles = JSON.parse(existingMediaFiles);
-      } catch {
-        existingMediaFiles = [];
-      }
-    }
-
-    if (!Array.isArray(existingMediaFiles)) {
-      existingMediaFiles = [];
-    }
-
-    
-    const finalMediaFiles = [
-      ...existingMediaFiles,
-      ...uploadedMediaFiles,
-    ];
-
-   
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        message: 'name required',
-      });
-    }
+    if (!name) return res.status(400).json({ success: false, message: 'name required' });
 
     if (cronExpr && !isValidCron(cronExpr)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid cron expression',
-      });
+      return res.status(400).json({ success: false, message: 'Invalid cron expression' });
     }
 
-   
     const item = {
-      _id: s${Date.now()},
+      _id: `s${Date.now()}`,
       name,
       type: type || 'Campaign',
       cronExpr: cronExpr || null,
       cronLabel: cronLabel || (cronExpr ? cronExpr : 'One-time'),
       timezone: timezone || 'Asia/Kolkata',
       repeat: repeat || (cronExpr ? 'Custom' : 'Once'),
-
-      status:
-        status ||
-        (cronExpr ? 'Active' : 'Scheduled'),
-
-      nextRun: cronExpr
-        ? nextFromCron(cronExpr)
-        : remindAt ||
-          new Date(Date.now() + 3600000).toISOString(),
-
+      status: status || (cronExpr ? 'Active' : 'Scheduled'),
+      nextRun: cronExpr ? nextFromCron(cronExpr) : remindAt || new Date(Date.now() + 3600000).toISOString(),
       lastRun: null,
-
       message: message || '',
-
-      recipients: Number(recipients) || 0,
-
-      contactIds,
-
-      deviceIds,
-
-     
-      mediaFiles: finalMediaFiles,
-
-      sendText:
-        sendText === true ||
-        sendText === 'true',
-
-      retryMax:
-        retryMax !== undefined
-          ? Number(retryMax)
-          : 3,
-
-      retryDelayMin:
-        retryDelayMin !== undefined
-          ? Number(retryDelayMin)
-          : 5,
-
+      recipients: recipients || 0,
+      contactIds: Array.isArray(contactIds) ? contactIds : [],
+      deviceIds: Array.isArray(deviceIds) ? deviceIds : [],
+      mediaFiles: Array.isArray(mediaFiles) ? mediaFiles : [],
+      sendText: sendText !== false,
+      retryMax: retryMax ?? 3,
+      retryDelayMin: retryDelayMin ?? 5,
       remindAt: remindAt || null,
-
       createdAt: new Date().toISOString(),
     };
 
-    
     store.schedules.unshift(item);
 
-    
-    if (
-      !item.cronExpr &&
-      item.type === 'Campaign' &&
-      item.nextRun
-    ) {
+    // A one-time campaign schedule is also persisted as a real Campaign so the
+    // persistent campaign scheduler can execute it after restart.
+    if (!item.cronExpr && item.type === 'Campaign' && item.nextRun) {
       try {
         if (isMongoConnected()) {
           await Campaign.create({
             name: item.name,
             message: item.message,
-
-            sendText:
-              item.sendText !== false,
-
-            mediaFiles:
-              item.mediaFiles || [],
-
-            recipients:
-              item.recipients || 0,
-
-            contactIds:
-              item.contactIds || [],
-
-            contacts:
-              item.contactIds || [],
-
-            deviceIds:
-              item.deviceIds || [],
-
+            sendText: item.sendText !== false,
+            mediaFiles: item.mediaFiles || [],
+            recipients: item.recipients || 0,
+            contactIds: item.contactIds || [],
+            contacts: item.contactIds || [],
+            deviceIds: item.deviceIds || [],
             status: 'Scheduled',
-
-            scheduledAt:
-              new Date(item.nextRun),
-
-            nextRunAt:
-              new Date(item.nextRun),
-
-            timezone:
-              item.timezone || 'Asia/Kolkata',
-
-            repeat:
-              item.repeat === 'Once'
-                ? 'No Repeat'
-                : item.repeat,
-
-            createdBy:
-              req.user?._id,
+            scheduledAt: new Date(item.nextRun),
+            nextRunAt: new Date(item.nextRun),
+            timezone: item.timezone || 'Asia/Kolkata',
+            repeat: item.repeat === 'Once' ? 'No Repeat' : item.repeat,
+            createdBy: req.user?._id,
           });
         }
       } catch (e) {
-        console.warn(
-          '[Scheduler] campaign persistence skipped:',
-          e.message
-        );
+        console.warn('[Scheduler] campaign persistence skipped:', e.message);
       }
     }
 
-    
-    if (
-      item.status === 'Active' &&
-      item.cronExpr &&
-      isValidCron(item.cronExpr)
-    ) {
+    // Register live cron if Active + valid expr
+    if (item.status === 'Active' && item.cronExpr && isValidCron(item.cronExpr)) {
       registerCronJob(item);
     }
 
-   
-    return res.status(201).json({
-      success: true,
-
-      data: item,
-
-      message: 'Schedule created successfully',
-    });
-
+    res.status(201).json({ success: true, data: item, message: 'Schedule created' });
   } catch (e) {
-    console.error(
-      '[Scheduler] createSchedule error:',
-      e
-    );
-
-    return res.status(500).json({
-      success: false,
-      message: e.message,
-    });
+    res.status(500).json({ success: false, message: e.message });
   }
 };
 exports.updateSchedule = async (req, res) => {
