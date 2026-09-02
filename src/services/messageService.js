@@ -352,94 +352,58 @@ function renderMessage(
 // SEND ONE MESSAGE
 // ============================================================
 
-async function sendOne(
-  deviceId,
-  item
-) {
-  const id =
-    normaliseDeviceId(
-      deviceId
-    );
+
+async function sendOne(deviceId, item) {
+  const id = normaliseDeviceId(deviceId);
 
   if (!id) {
-    throw new Error(
-      'Valid deviceId is required'
-    );
+    throw new Error("Valid deviceId is required");
   }
 
-  console.log(
-    '========================================'
-  );
+  console.log("========================================");
 
-  console.log(
-    '[WA SEND] Requested deviceId:',
-    deviceId
-  );
+  console.log("[WA SEND] Requested deviceId:", deviceId);
 
-  console.log(
-    '[WA SEND] Normalized deviceId:',
-    id
-  );
+  console.log("[WA SEND] Normalized deviceId:", id);
 
   // ----------------------------------------------------------
   // Get LIVE Baileys session
   // ----------------------------------------------------------
 
-  const session =
-    wa.getSession(id);
+  const session = wa.getSession(id);
 
-  console.log(
-    '[WA SEND] Session found:',
-    Boolean(session)
-  );
+  console.log("[WA SEND] Session found:", Boolean(session));
 
   if (!session) {
-    console.error(
-      '[WA SEND] Session not found:',
-      id
-    );
+    console.error("[WA SEND] Session not found:", id);
 
-    console.error(
-      '[WA SEND] Available sessions:',
-      wa.getAllSessions()
-    );
+    console.error("[WA SEND] Available sessions:", wa.getAllSessions());
 
     throw new Error(
       `Device ${id} session not found. ` +
-        `Please connect the device and scan QR.`
+        `Please connect the device and scan QR.`,
     );
   }
 
-  console.log(
-    '[WA SEND] Session status:',
-    session.status
-  );
+  console.log("[WA SEND] Session status:", session.status);
 
-  console.log(
-    '[WA SEND] Socket available:',
-    Boolean(session.sock)
-  );
+  console.log("[WA SEND] Socket available:", Boolean(session.sock));
 
   // ----------------------------------------------------------
   // Check socket
   // ----------------------------------------------------------
 
   if (!session.sock) {
-    throw new Error(
-      `Device ${id} socket is not available.`
-    );
+    throw new Error(`Device ${id} socket is not available.`);
   }
 
   // ----------------------------------------------------------
   // Check status
   // ----------------------------------------------------------
 
-  if (
-    session.status !== 'Online'
-  ) {
+  if (session.status !== "Online") {
     throw new Error(
-      `Device ${id} is not connected. ` +
-        `Current status: ${session.status}`
+      `Device ${id} is not connected. ` + `Current status: ${session.status}`,
     );
   }
 
@@ -447,108 +411,79 @@ async function sendOne(
   // Destination
   // ----------------------------------------------------------
 
-  const to =
-    item?.jid ||
-    normalisePhone(
-      item?.phone
-    );
+  const to = item?.jid || normalisePhone(item?.phone);
 
   if (!to) {
-    throw new Error(
-      'phone or jid required'
-    );
+    throw new Error("phone or jid required");
   }
 
   // ----------------------------------------------------------
   // Render message
   // ----------------------------------------------------------
 
-  const message =
-    renderMessage(
-      item?.message ||
-        item?.text ||
-        '',
-      item?.contact ||
-        item ||
-        {}
-    );
+  const message = renderMessage(
+    item?.message || item?.text || "",
+    item?.contact || item || {},
+  );
 
   // ----------------------------------------------------------
   // Media
   // ----------------------------------------------------------
 
-  const mediaFiles =
-    Array.isArray(
-      item?.mediaFiles
-    )
-      ? item.mediaFiles
-      : item?.media
-        ? [item.media]
-        : [];
+  const mediaFiles = Array.isArray(item?.mediaFiles)
+    ? item.mediaFiles
+    : item?.media
+      ? [item.media]
+      : [];
 
-  const sendText =
-    item?.sendText !== false;
+  const sendText = item?.sendText !== false;
 
-  let lastResult =
-    null;
+  let lastResult = null;
 
   // ==========================================================
   // SEND TEXT
   // ==========================================================
 
-  if (
-    sendText &&
-    message
-  ) {
-    console.log(
-      `[WA SEND] Sending text: ${id} -> ${to}`
-    );
+  if (sendText && message) {
+    console.log(`[WA SEND] Sending text: ${id} -> ${to}`);
 
-    lastResult =
-      await session.sock.sendMessage(
-        to,
-        {
-          text: message,
-        }
-      );
+    lastResult = await session.sock.sendMessage(to, {
+      text: message,
+    });
 
-    console.log(
-      '[WA SEND] Text sent:',
-      lastResult?.key?.id ||
-        null
-    );
+    console.log("[WA SEND] Text sent:", lastResult?.key?.id || null);
   }
-
   // ==========================================================
   // SEND MEDIA
   // ==========================================================
 
-  for (
-    const media of mediaFiles
-  ) {
+  console.log("[WA SEND] Media files:", mediaFiles);
+
+  console.log("[WA SEND] Media count:", mediaFiles.length);
+
+  for (const media of mediaFiles) {
+    console.log("----------------------------------------");
+
+    console.log("[WA SEND] Sending media:", media);
+
+    console.log(`[WA SEND] Device: ${id} -> ${to}`);
+
+    // Create Baileys media payload
+    const payload = mediaPayload(media, sendText ? undefined : message);
+
+    console.log("[WA SEND] Media payload keys:", Object.keys(payload));
+
+    console.log("[WA SEND] Sending payload to WhatsApp...");
+
+    // Send media
+    lastResult = await session.sock.sendMessage(to, payload);
+
     console.log(
-      `[WA SEND] Sending media: ${id} -> ${to}`
+      "[WA SEND] Media sent successfully:",
+      lastResult?.key?.id || null,
     );
 
-    const payload =
-      mediaPayload(
-        media,
-        sendText
-          ? undefined
-          : message
-      );
-
-    lastResult =
-      await session.sock.sendMessage(
-        to,
-        payload
-      );
-
-    console.log(
-      '[WA SEND] Media sent:',
-      lastResult?.key?.id ||
-        null
-    );
+    console.log("----------------------------------------");
   }
 
   // ==========================================================
@@ -556,29 +491,20 @@ async function sendOne(
   // ==========================================================
 
   if (!lastResult) {
-    throw new Error(
-      'Nothing to send: enable text or attach media'
-    );
+    throw new Error("Nothing to send: enable text or attach media");
   }
 
-  console.log(
-    `[WA SEND] SUCCESS: ${id} -> ${to}`
-  );
+  console.log(`[WA SEND] SUCCESS: ${id} -> ${to}`);
 
-  console.log(
-    '========================================'
-  );
+  console.log("========================================");
 
   return {
     ok: true,
     to,
     deviceId: id,
-    messageId:
-      lastResult?.key?.id ||
-      null,
+    messageId: lastResult?.key?.id || null,
   };
 }
-
 // ============================================================
 // SEND BULK
 // ============================================================
