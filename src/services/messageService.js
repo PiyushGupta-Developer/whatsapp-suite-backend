@@ -80,11 +80,7 @@ function resolveFile(media) {
     return null;
   }
 
-  const input =
-    media.path ||
-    media.url ||
-    media.file ||
-    media.filePath;
+  const input = media.path || media.url || media.file || media.filePath;
 
   if (!input) {
     return null;
@@ -97,135 +93,83 @@ function resolveFile(media) {
     };
   }
 
-  const clean = String(input)
-    .replace(/^\/+/, '');
+  const clean = String(input).replace(/^\/+/, "");
 
   const candidates = [
-    // Project relative
-    path.isAbsolute(input)
-      ? input
-      : path.join(
-          __dirname,
-          '../..',
-          clean
-        ),
+    path.isAbsolute(input) ? input : path.join(__dirname, "../..", clean),
 
-    // Upload directory
-    path.join(
-      UPLOAD_DIR,
-      path.basename(input)
-    ),
+    path.join(UPLOAD_DIR, path.basename(input)),
   ];
 
-  const filePath =
-    candidates.find((file) =>
-      fs.existsSync(file)
-    );
+  const filePath = candidates.find((file) => fs.existsSync(file));
 
   if (!filePath) {
-    throw new Error(
-      `Media file not found: ${input}`
-    );
+    throw new Error(`Media file not found: ${input}`);
   }
 
-  return {
-    buffer: fs.readFileSync(
-      filePath
-    ),
-  };
+  // IMPORTANT: Return actual Buffer
+  return fs.readFileSync(filePath);
 }
-
 // ============================================================
 // CREATE BAILEYS MEDIA PAYLOAD
 // ============================================================
-
-function mediaPayload(
-  media,
-  caption
-) {
+function mediaPayload(media, caption) {
   if (!media) {
-    throw new Error(
-      'Invalid media attachment'
-    );
+    throw new Error("Invalid media attachment");
   }
 
-  const mime = String(
-    media.mimeType ||
-      media.mimetype ||
-      ''
-  ).toLowerCase();
+  const mime = String(media.mimeType || media.mimetype || "").toLowerCase();
 
-  const type = String(
-    media.type || ''
-  ).toLowerCase();
+  const type = String(media.type || "").toLowerCase();
 
-  const source =
-    resolveFile(media);
+  const source = resolveFile(media);
 
   if (!source) {
-    throw new Error(
-      'Invalid media attachment'
-    );
-  }
-
-  const base = {
-    ...source,
-  };
-
-  if (caption) {
-    base.caption = caption;
+    throw new Error("Invalid media attachment");
   }
 
   // IMAGE
-  if (
-    type === 'image' ||
-    mime.startsWith('image/')
-  ) {
-    return {
-      image: base,
+  if (type === "image" || mime.startsWith("image/")) {
+    const payload = {
+      image: source,
     };
+
+    if (caption) {
+      payload.caption = caption;
+    }
+
+    return payload;
   }
 
   // VIDEO
-  if (
-    type === 'video' ||
-    mime.startsWith('video/')
-  ) {
-    return {
-      video: base,
+  if (type === "video" || mime.startsWith("video/")) {
+    const payload = {
+      video: source,
     };
+
+    if (caption) {
+      payload.caption = caption;
+    }
+
+    return payload;
   }
 
   // AUDIO
-  if (
-    type === 'audio' ||
-    mime.startsWith('audio/')
-  ) {
+  if (type === "audio" || mime.startsWith("audio/")) {
     return {
-      audio: {
-        ...source,
-        ptt: Boolean(
-          media.ptt
-        ),
-      },
-      mimetype:
-        mime || 'audio/mpeg',
+      audio: source,
+      mimetype: mime || "audio/mpeg",
+      ptt: Boolean(media.ptt),
     };
   }
 
-  // DOCUMENT / PDF
+  // DOCUMENT
   return {
-    document: base,
-    mimetype:
-      mime ||
-      'application/pdf',
-    fileName:
-      media.originalName ||
-      media.filename ||
-      'attachment',
+    document: source,
+    mimetype: mime || "application/octet-stream",
+    fileName: media.originalName || media.filename || "attachment",
   };
 }
-
 // ============================================================
 // GET ACTIVE DEVICE IDS
 // ============================================================
