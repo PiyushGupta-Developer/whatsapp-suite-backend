@@ -352,7 +352,6 @@ function renderMessage(
 // SEND ONE MESSAGE
 // ============================================================
 
-
 async function sendOne(deviceId, item) {
   const id = normaliseDeviceId(deviceId);
 

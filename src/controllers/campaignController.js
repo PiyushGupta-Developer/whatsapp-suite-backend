@@ -1,12 +1,12 @@
-const Campaign = require('../models/Campaign');
-const Contact = require('../models/Contact');
-const Group = require('../models/Group');
-const { store, init, isMongoConnected } = require('../utils/memoryStore');
-const messageService = require('../services/messageService');
+const Campaign = require("../models/Campaign");
+const Contact = require("../models/Contact");
+const Group = require("../models/Group");
+const { store, init, isMongoConnected } = require("../utils/memoryStore");
+const messageService = require("../services/messageService");
 function parseJsonField(value, fallback = []) {
   if (Array.isArray(value)) return value;
 
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       return JSON.parse(value);
     } catch (error) {
@@ -17,34 +17,89 @@ function parseJsonField(value, fallback = []) {
   return fallback;
 }
 
-
 function nextRepeatDate(date, repeat) {
   const d = new Date(date);
-  if (repeat === 'Daily') d.setDate(d.getDate() + 1);
-  else if (repeat === 'Weekly') d.setDate(d.getDate() + 7);
-  else if (repeat === 'Monthly') d.setMonth(d.getMonth() + 1);
+  if (repeat === "Daily") d.setDate(d.getDate() + 1);
+  else if (repeat === "Weekly") d.setDate(d.getDate() + 7);
+  else if (repeat === "Monthly") d.setMonth(d.getMonth() + 1);
   else return null;
   return d;
 }
 
-async function expandRecipients(body) {
-  let list = Array.isArray(body.recipients) ? body.recipients : (Array.isArray(body.contacts) ? body.contacts : []);
+async function expandRecipients(body, userId) {
+  let list = Array.isArray(body.recipients)
+    ? body.recipients
+    : Array.isArray(body.contacts)
+      ? body.contacts
+      : [];
+
   if (isMongoConnected()) {
-    const ids = list.filter((x) => typeof x === 'string' || (x && x._id)).map((x) => String(x._id || x));
-    if (ids.length) list = await Contact.find({ _id: { $in: ids }, status: { $ne: 'Unsubscribed' } }).lean();
+    const ids = list
+      .filter((x) => typeof x === "string" || (x && x._id))
+      .map((x) => String(x._id || x));
+
+    // Sirf logged-in user ke contacts
+    if (ids.length) {
+      list = await Contact.find({
+        _id: { $in: ids },
+        createdBy: userId,
+        status: { $ne: "Unsubscribed" },
+      }).lean();
+    }
+
+    // Sirf logged-in user ki contact lists ke contacts
     if (Array.isArray(body.contactListIds) && body.contactListIds.length) {
-      const extra = await Contact.find({ lists: { $in: body.contactListIds }, status: { $ne: 'Unsubscribed' } }).lean();
+      const extra = await Contact.find({
+        lists: { $in: body.contactListIds },
+        createdBy: userId,
+        status: { $ne: "Unsubscribed" },
+      }).lean();
+
       list = [...list, ...extra];
     }
+
+    // Sirf logged-in user ke contacts
     if (Array.isArray(body.groups) && body.groups.length) {
-      const extra = await Contact.find({ group: { $in: body.groups }, status: { $ne: 'Unsubscribed' } }).lean().catch(() => []);
+      const extra = await Contact.find({
+        group: { $in: body.groups },
+        createdBy: userId,
+        status: { $ne: "Unsubscribed" },
+      })
+        .lean()
+        .catch(() => []);
+
       list = [...list, ...extra];
     }
+  } else {
+    // Memory store me bhi sirf logged-in user ke contacts
+    await init();
+
+    list = list.filter((contact) => {
+      if (typeof contact === "string") {
+        const found = store.contacts.find(
+          (c) =>
+            String(c._id) === String(contact) &&
+            String(c.createdBy) === String(userId),
+        );
+        return !!found;
+      }
+
+      if (contact?._id) {
+        return String(contact.createdBy) === String(userId);
+      }
+
+      // Direct recipient ko allow karenge
+      return !!(contact?.phone || contact?.number);
+    });
   }
+
   const seen = new Set();
+
   return list.filter((c) => {
     const phone = c.phone || c.number;
+
     if (!phone || seen.has(String(phone))) return false;
+
     seen.add(String(phone));
     return true;
   });
@@ -55,38 +110,54 @@ async function persistCampaign(data, req) {
     return Campaign.create({ ...data, createdBy: req.user?._id });
   }
   await init();
-  const campaign = { _id: `c${Date.now()}`, ...data, createdAt: new Date().toISOString(), createdBy: req.user?._id };
+  const campaign = {
+    _id: `c${Date.now()}`,
+    ...data,
+    createdAt: new Date().toISOString(),
+    createdBy: req.user?._id,
+  };
   store.campaigns.unshift(campaign);
   return campaign;
 }
 
 async function executeCampaign(campaign, recipients) {
-  campaign.status = 'Running';
+  campaign.status = "Running";
   campaign.startedAt = new Date();
   const items = recipients.map((contact) => ({
     phone: contact.phone || contact.number,
     jid: contact.whatsappId || contact.jid,
     contact,
-    message: campaign.message || '',
+    message: campaign.message || "",
     sendText: campaign.sendText !== false,
     mediaFiles: campaign.mediaFiles || [],
   }));
 
-  const result = await messageService.sendBulk(items, campaign.deviceIds?.length ? campaign.deviceIds : (campaign.device ? [campaign.device] : []));
+  const result = await messageService.sendBulk(
+    items,
+    campaign.deviceIds?.length
+      ? campaign.deviceIds
+      : campaign.device
+        ? [campaign.device]
+        : [],
+  );
   const sent = result.results.filter((r) => r.ok).length;
   const failed = result.results.length - sent;
 
   if (isMongoConnected()) {
-    const updated = await Campaign.findByIdAndUpdate(campaign._id, {
-      sent,
-      delivered: 0,
-      read: 0,
-      failed,
-      recipients: items.length,
-      status: failed === items.length ? 'Failed' : 'Completed',
-      completedAt: new Date(),
-      report: { total: items.length, sent, failed, results: result.results },
-    }, { new: true });
+    const updated = await Campaign.findByIdAndUpdate(
+      campaign._id,
+      {
+        sent,
+        delivered: 0,
+        read: 0,
+        failed,
+        recipients: items.length,
+        status: failed === items.length ? "Failed" : "Completed",
+        completedAt: new Date(),
+        report: { total: items.length, sent, failed, results: result.results },
+      },
+      { new: true },
+    );
     return updated;
   }
 
@@ -94,51 +165,138 @@ async function executeCampaign(campaign, recipients) {
   campaign.delivered = 0;
   campaign.read = 0;
   campaign.failed = failed;
-  campaign.status = failed === items.length ? 'Failed' : 'Completed';
+  campaign.status = failed === items.length ? "Failed" : "Completed";
   campaign.completedAt = new Date().toISOString();
-  campaign.report = { total: items.length, sent, failed, results: result.results };
+  campaign.report = {
+    total: items.length,
+    sent,
+    failed,
+    results: result.results,
+  };
   return campaign;
 }
 
 exports.getCampaigns = async (req, res) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
+    const userId = req.user._id;
+
     if (isMongoConnected()) {
-      const filter = {};
-      if (status && status !== 'All Status') filter.status = status;
-      const p = Math.max(1, parseInt(page, 10)), l = Math.min(100, Math.max(1, parseInt(limit, 10)));
+      const filter = {
+        createdBy: userId,
+      };
+
+      if (status && status !== "All Status") {
+        filter.status = status;
+      }
+
+      const p = Math.max(1, parseInt(page, 10));
+      const l = Math.min(100, Math.max(1, parseInt(limit, 10)));
+
       const [campaigns, total] = await Promise.all([
-        Campaign.find(filter).populate('device deviceIds contacts createdBy', 'name phoneNumber phone email').sort({ createdAt: -1 }).skip((p - 1) * l).limit(l),
+        Campaign.find(filter)
+          .populate(
+            "device deviceIds contacts createdBy",
+            "name phoneNumber phone email",
+          )
+          .sort({ createdAt: -1 })
+          .skip((p - 1) * l)
+          .limit(l),
+
         Campaign.countDocuments(filter),
       ]);
-      return res.json({ success: true, count: campaigns.length, total, page: p, pages: Math.ceil(total / l), data: campaigns });
+
+      return res.json({
+        success: true,
+        count: campaigns.length,
+        total,
+        page: p,
+        pages: Math.ceil(total / l),
+        data: campaigns,
+      });
     }
+
     await init();
-    let list = [...store.campaigns];
-    if (status && status !== 'All Status') list = list.filter((c) => c.status === status);
-    res.json({ success: true, count: list.length, total: list.length, page: 1, pages: 1, data: list });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+
+    let list = store.campaigns.filter(
+      (c) => String(c.createdBy) === String(userId),
+    );
+
+    if (status && status !== "All Status") {
+      list = list.filter((c) => c.status === status);
+    }
+
+    return res.json({
+      success: true,
+      count: list.length,
+      total: list.length,
+      page: 1,
+      pages: 1,
+      data: list,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
 };
 
 exports.getCampaign = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     if (isMongoConnected()) {
-      const c = await Campaign.findById(req.params.id).populate('device deviceIds contacts createdBy');
-      if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-      return res.json({ success: true, data: c });
+      const c = await Campaign.findOne({
+        _id: req.params.id,
+        createdBy: userId,
+      }).populate("device deviceIds contacts createdBy");
+
+      if (!c) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: c,
+      });
     }
+
     await init();
-    const c = store.campaigns.find((x) => x._id === req.params.id);
-    if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-    res.json({ success: true, data: c });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+
+    const c = store.campaigns.find(
+      (x) =>
+        String(x._id) === String(req.params.id) &&
+        String(x.createdBy) === String(userId),
+    );
+
+    if (!c) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: c,
+    });
+  } catch (e) {
+    res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.createCampaign = async (req, res) => {
   try {
     const {
       name,
-      message = '',
+      message = "",
       mediaFiles = [],
       recipients,
       contacts,
@@ -146,8 +304,8 @@ exports.createCampaign = async (req, res) => {
       deviceId,
       deviceIds,
       scheduledAt,
-      timezone = 'Asia/Kolkata',
-      repeat = 'No Repeat',
+      timezone = "Asia/Kolkata",
+      repeat = "No Repeat",
       endDate,
       sendNow = false,
       sendText = true,
@@ -169,45 +327,41 @@ console.log("=================================\n");
         mimeType: file.mimetype,
         size: file.size,
         path: `/uploads/${file.filename}`,
-        type: file.mimetype.startsWith('image/')
-          ? 'Image'
-          : file.mimetype.startsWith('video/')
-          ? 'Video'
-          : file.mimetype.startsWith('audio/')
-          ? 'Audio'
-          : 'Document',
+        type: file.mimetype.startsWith("image/")
+          ? "Image"
+          : file.mimetype.startsWith("video/")
+            ? "Video"
+            : file.mimetype.startsWith("audio/")
+              ? "Audio"
+              : "Document",
       }));
 
-      finalMediaFiles = [
-        ...finalMediaFiles,
-        ...uploadedFiles,
-      ];
+      finalMediaFiles = [...finalMediaFiles, ...uploadedFiles];
     }
 
-   const parsedRecipients = parseJsonField(recipients);
-const parsedContacts = parseJsonField(contacts);
-const parsedContactIds = parseJsonField(contactIds);
+    const parsedRecipients = parseJsonField(recipients);
+    const parsedContacts = parseJsonField(contacts);
+    const parsedContactIds = parseJsonField(contactIds);
 
-const recipientInput =
-  parsedRecipients.length > 0
-    ? parsedRecipients
-    : parsedContacts.length > 0
-      ? parsedContacts
-      : parsedContactIds;
+    const recipientInput =
+      parsedRecipients.length > 0
+        ? parsedRecipients
+        : parsedContacts.length > 0
+          ? parsedContacts
+          : parsedContactIds;
 
-const body = {
-  ...req.body,
-  recipients: recipientInput,
-};
+    const body = {
+      ...req.body,
+      recipients: recipientInput,
+    };
 
-
-    const list = await expandRecipients(body);
+    const list = await expandRecipients(body, req.user._id);
 
     // Validate message or media
     if (!message && !finalMediaFiles.length) {
       return res.status(400).json({
         success: false,
-        message: 'message or mediaFiles required',
+        message: "message or mediaFiles required",
       });
     }
 
@@ -215,27 +369,27 @@ const body = {
     if (!list.length) {
       return res.status(400).json({
         success: false,
-        message: 'At least one recipient/contact is required',
+        message: "At least one recipient/contact is required",
       });
     }
 
-    const runAt = scheduledAt
-      ? new Date(scheduledAt)
-      : null;
+    const runAt = scheduledAt ? new Date(scheduledAt) : null;
 
     if (runAt && Number.isNaN(runAt.getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid scheduledAt',
+        message: "Invalid scheduledAt",
       });
     }
 
     const parsedDeviceIds = parseJsonField(deviceIds);
 
-const ids =
-  Array.isArray(parsedDeviceIds) && parsedDeviceIds.length > 0
-    ? parsedDeviceIds
-    : (deviceId ? [deviceId] : []);
+    const ids =
+      Array.isArray(parsedDeviceIds) && parsedDeviceIds.length > 0
+        ? parsedDeviceIds
+        : deviceId
+          ? [deviceId]
+          : [];
 
     const data = {
       name: name || `Campaign ${new Date().toISOString()}`,
@@ -251,11 +405,7 @@ const ids =
       read: 0,
       failed: 0,
 
-      status: sendNow
-        ? 'Running'
-        : runAt
-          ? 'Scheduled'
-          : 'Draft',
+      status: sendNow ? "Running" : runAt ? "Scheduled" : "Draft",
 
       scheduledAt: runAt,
       nextRunAt: runAt,
@@ -263,32 +413,26 @@ const ids =
       timezone,
       repeat,
 
-      endDate: endDate
-        ? new Date(endDate)
-        : null,
+      endDate: endDate ? new Date(endDate) : null,
 
-      device: ids.length === 1
-        ? ids[0]
-        : undefined,
+      device: ids.length === 1 ? ids[0] : undefined,
 
       deviceIds: ids,
 
-     contacts: isMongoConnected()
-  ? list.map((x) => x._id).filter(Boolean)
-  : [],
+      contacts: isMongoConnected()
+        ? list.map((x) => x._id).filter(Boolean)
+        : [],
 
-directRecipients: list
-  .filter((x) => !x._id)
-  .map((x) => ({
-    name: x.name || '',
-    phone: x.phone || x.number || '',
-    whatsappId: x.whatsappId || x.jid || '',
-  })),
+      directRecipients: list
+        .filter((x) => !x._id)
+        .map((x) => ({
+          name: x.name || "",
+          phone: x.phone || x.number || "",
+          whatsappId: x.whatsappId || x.jid || "",
+        })),
 
       estimatedTimeMinutes: Math.ceil(
-        list.length /
-        Math.max(1, ids.length || 1) /
-        80
+        list.length / Math.max(1, ids.length || 1) / 80,
       ),
     };
 console.log("Final media files:", finalMediaFiles);
@@ -296,19 +440,16 @@ console.log("Final media files:", finalMediaFiles);
 
     if (sendNow) {
       executeCampaign(campaign, list).catch(async (e) => {
-        console.error('[Campaign] send error:', e.message);
+        console.error("[Campaign] send error:", e.message);
 
         if (isMongoConnected()) {
-          await Campaign.findByIdAndUpdate(
-            campaign._id,
-            {
-              status: 'Failed',
-              failed: list.length,
-              completedAt: new Date(),
-            }
-          );
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            status: "Failed",
+            failed: list.length,
+            completedAt: new Date(),
+          });
         } else {
-          campaign.status = 'Failed';
+          campaign.status = "Failed";
           campaign.failed = list.length;
         }
       });
@@ -319,14 +460,13 @@ console.log("Final media files:", finalMediaFiles);
       data: campaign,
       queued: list.length,
       message: sendNow
-        ? 'Campaign accepted and sending in background'
+        ? "Campaign accepted and sending in background"
         : runAt
-          ? 'Campaign scheduled'
-          : 'Campaign saved as draft',
+          ? "Campaign scheduled"
+          : "Campaign saved as draft",
     });
-
   } catch (error) {
-    console.error('[Campaign] create error:', error);
+    console.error("[Campaign] create error:", error);
 
     return res.status(400).json({
       success: false,
@@ -336,139 +476,491 @@ console.log("Final media files:", finalMediaFiles);
 };
 exports.updateCampaign = async (req, res) => {
   try {
+    const userId = req.user._id;
+
+    // User ownership change nahi kar sakta
+    delete req.body.createdBy;
+
     if (isMongoConnected()) {
-      const c = await Campaign.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-      if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-      return res.json({ success: true, data: c });
+      const c = await Campaign.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          createdBy: userId,
+        },
+        req.body,
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!c) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: c,
+      });
     }
+
     await init();
-    const c = store.campaigns.find((x) => x._id === req.params.id);
-    if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-    Object.assign(c, req.body, { updatedAt: new Date().toISOString() });
-    res.json({ success: true, data: c });
-  } catch (e) { res.status(400).json({ success: false, message: e.message }); }
+
+    const c = store.campaigns.find(
+      (x) =>
+        String(x._id) === String(req.params.id) &&
+        String(x.createdBy) === String(userId),
+    );
+
+    if (!c) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found",
+      });
+    }
+
+    Object.assign(c, req.body, {
+      updatedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      data: c,
+    });
+  } catch (e) {
+    res.status(400).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.deleteCampaign = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     if (isMongoConnected()) {
-      const c = await Campaign.findByIdAndDelete(req.params.id);
-      if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-      return res.json({ success: true, message: 'Campaign deleted' });
+      const c = await Campaign.findOneAndDelete({
+        _id: req.params.id,
+        createdBy: userId,
+      });
+
+      if (!c) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Campaign deleted",
+      });
     }
+
     await init();
-    const i = store.campaigns.findIndex((x) => x._id === req.params.id);
-    if (i < 0) return res.status(404).json({ success: false, message: 'Campaign not found' });
+
+    const i = store.campaigns.findIndex(
+      (x) =>
+        String(x._id) === String(req.params.id) &&
+        String(x.createdBy) === String(userId),
+    );
+
+    if (i < 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found",
+      });
+    }
+
     store.campaigns.splice(i, 1);
-    res.json({ success: true, message: 'Campaign deleted' });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+
+    return res.json({
+      success: true,
+      message: "Campaign deleted",
+    });
+  } catch (e) {
+    res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.getDashboardStats = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     if (isMongoConnected()) {
-      const [totalContacts, campaigns] = await Promise.all([Contact.countDocuments(), Campaign.find().lean()]);
+      const [totalContacts, campaigns] = await Promise.all([
+        Contact.countDocuments({
+          createdBy: userId,
+        }),
+
+        Campaign.find({
+          createdBy: userId,
+        }).lean(),
+      ]);
+
       const messagesSent = campaigns.reduce((s, c) => s + (c.sent || 0), 0);
+
       const delivered = campaigns.reduce((s, c) => s + (c.delivered || 0), 0);
+
       const failed = campaigns.reduce((s, c) => s + (c.failed || 0), 0);
-      const pending = Math.max(0, campaigns.reduce((s, c) => s + (c.recipients || 0), 0) - messagesSent - failed);
-      return res.json({ success: true, data: {
-        totalContacts, messagesSent, delivered, failed, pending,
-        recentCampaigns: campaigns.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5),
-        campaignStatus: { Delivered: delivered, Failed: failed, Pending: pending },
-        deliveredRate: messagesSent ? Number((delivered / messagesSent * 100).toFixed(1)) : 0,
-      }});
+
+      const totalRecipients = campaigns.reduce(
+        (s, c) => s + (c.recipients || 0),
+        0,
+      );
+
+      const pending = Math.max(0, totalRecipients - messagesSent - failed);
+
+      return res.json({
+        success: true,
+        data: {
+          totalContacts,
+          messagesSent,
+          delivered,
+          failed,
+          pending,
+
+          recentCampaigns: campaigns
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .slice(0, 5),
+
+          campaignStatus: {
+            Delivered: delivered,
+            Failed: failed,
+            Pending: pending,
+          },
+
+          deliveredRate: messagesSent
+            ? Number(((delivered / messagesSent) * 100).toFixed(1))
+            : 0,
+        },
+      });
     }
+
+    // MEMORY STORE
     await init();
-    const campaigns = store.campaigns || [];
-    const messagesSent = campaigns.reduce((s,c)=>s+(c.sent||0),0);
-    const delivered = campaigns.reduce((s,c)=>s+(c.delivered||0),0);
-    const failed = campaigns.reduce((s,c)=>s+(c.failed||0),0);
-    const pending = Math.max(0, campaigns.reduce((s,c)=>s+(c.recipients||0),0)-messagesSent-failed);
-    res.json({ success:true, data:{ totalContacts:store.contacts.length, messagesSent, delivered, failed, pending, recentCampaigns:campaigns.slice(0,5), campaignStatus:{Delivered:delivered,Failed:failed,Pending:pending}, deliveredRate:messagesSent?Number((delivered/messagesSent*100).toFixed(1)):0 }});
-  } catch (e) { res.status(500).json({ success:false,message:e.message }); }
+
+    const contacts = store.contacts.filter(
+      (c) => String(c.createdBy) === String(userId),
+    );
+
+    const campaigns = store.campaigns.filter(
+      (c) => String(c.createdBy) === String(userId),
+    );
+
+    const messagesSent = campaigns.reduce((s, c) => s + (c.sent || 0), 0);
+
+    const delivered = campaigns.reduce((s, c) => s + (c.delivered || 0), 0);
+
+    const failed = campaigns.reduce((s, c) => s + (c.failed || 0), 0);
+
+    const totalRecipients = campaigns.reduce(
+      (s, c) => s + (c.recipients || 0),
+      0,
+    );
+
+    const pending = Math.max(0, totalRecipients - messagesSent - failed);
+
+    return res.json({
+      success: true,
+      data: {
+        totalContacts: contacts.length,
+        messagesSent,
+        delivered,
+        failed,
+        pending,
+
+        recentCampaigns: campaigns
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 5),
+
+        campaignStatus: {
+          Delivered: delivered,
+          Failed: failed,
+          Pending: pending,
+        },
+
+        deliveredRate: messagesSent
+          ? Number(((delivered / messagesSent) * 100).toFixed(1))
+          : 0,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.sendCampaign = async (req, res) => {
   try {
-    let campaign, list;
-    if (isMongoConnected()) {
-  campaign = await Campaign.findById(req.params.id);
-  if (!campaign) return res.status(404).json({
-    success: false,
-    message: 'Campaign not found'
-  });
+    const userId = req.user._id;
 
-  list = await Contact.find({
-    _id: { $in: campaign.contacts }
-  }).lean();
-} else {
+    let campaign;
+    let list;
+
+    if (isMongoConnected()) {
+      // Sirf apna campaign
+      campaign = await Campaign.findOne({
+        _id: req.params.id,
+        createdBy: userId,
+      });
+
+      if (!campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      // Sirf apne contacts
+      list = await Contact.find({
+        _id: {
+          $in: campaign.contacts,
+        },
+        createdBy: userId,
+        status: {
+          $ne: "Unsubscribed",
+        },
+      }).lean();
+
+      // Direct recipients bhi include karo
+      const directRecipients = Array.isArray(campaign.directRecipients)
+        ? campaign.directRecipients
+        : [];
+
+      list = [...list, ...directRecipients];
+    } else {
       await init();
-      campaign = store.campaigns.find((c) => c._id === req.params.id);
-      if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found' });
-      list = Array.isArray(campaign.contacts) ? campaign.contacts : [];
+
+      campaign = store.campaigns.find(
+        (c) =>
+          String(c._id) === String(req.params.id) &&
+          String(c.createdBy) === String(userId),
+      );
+
+      if (!campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      const contactIds = Array.isArray(campaign.contacts)
+        ? campaign.contacts
+        : [];
+
+      list = store.contacts.filter(
+        (contact) =>
+          contactIds.some((id) => String(id) === String(contact._id)) &&
+          String(contact.createdBy) === String(userId),
+      );
+
+      if (Array.isArray(campaign.directRecipients)) {
+        list.push(...campaign.directRecipients);
+      }
     }
-    executeCampaign(campaign, list).catch((e) => console.error('[Campaign] send error:', e.message));
-    res.json({ success: true, message: 'Campaign accepted for sending' });
-  } catch (e) { res.status(400).json({ success: false, message: e.message }); }
+
+    if (!list.length) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid recipients found",
+      });
+    }
+
+    executeCampaign(campaign, list).catch((e) =>
+      console.error("[Campaign] send error:", e.message),
+    );
+
+    return res.json({
+      success: true,
+      message: "Campaign accepted for sending",
+    });
+  } catch (e) {
+    res.status(400).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.getReport = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     if (isMongoConnected()) {
-      const c = await Campaign.findById(req.params.id).select('name recipients sent delivered read failed status report createdAt completedAt');
-      if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-      return res.json({ success: true, data: c, report: { total: c.recipients, sent: c.sent, delivered: c.delivered, failed: c.failed, read: c.read, status: c.status } });
+      const c = await Campaign.findOne({
+        _id: req.params.id,
+        createdBy: userId,
+      }).select(
+        "name recipients sent delivered read failed status report createdAt completedAt",
+      );
+
+      if (!c) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: c,
+        report: {
+          total: c.recipients,
+          sent: c.sent,
+          delivered: c.delivered,
+          failed: c.failed,
+          read: c.read,
+          status: c.status,
+        },
+      });
     }
+
     await init();
-    const c = store.campaigns.find((x) => x._id === req.params.id);
-    if (!c) return res.status(404).json({ success: false, message: 'Campaign not found' });
-    res.json({ success: true, data: c, report: { total:c.recipients, sent:c.sent, delivered:c.delivered, failed:c.failed, read:c.read, status:c.status }});
-  } catch (e) { res.status(500).json({ success:false,message:e.message }); }
+
+    const c = store.campaigns.find(
+      (x) =>
+        String(x._id) === String(req.params.id) &&
+        String(x.createdBy) === String(userId),
+    );
+
+    if (!c) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: c,
+      report: {
+        total: c.recipients,
+        sent: c.sent,
+        delivered: c.delivered,
+        failed: c.failed,
+        read: c.read,
+        status: c.status,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 exports.getReports = async (req, res) => {
   try {
+    const userId = req.user._id;
     let campaigns = [];
-    if (isMongoConnected()) campaigns = await Campaign.find().lean();
-    else { await init(); campaigns = store.campaigns || []; }
 
-    const summary = campaigns.reduce((a, c) => {
-      a.total += c.recipients || 0;
-      a.sent += c.sent || 0;
-      a.delivered += c.delivered || 0;
-      a.failed += c.failed || 0;
-      a.read += c.read || 0;
-      return a;
-    }, { total: 0, sent: 0, delivered: 0, failed: 0, read: 0 });
+    if (isMongoConnected()) {
+      campaigns = await Campaign.find({
+        createdBy: userId,
+      }).lean();
+    } else {
+      await init();
+
+      campaigns = store.campaigns.filter(
+        (c) => String(c.createdBy) === String(userId),
+      );
+    }
+
+    const summary = campaigns.reduce(
+      (a, c) => {
+        a.total += c.recipients || 0;
+        a.sent += c.sent || 0;
+        a.delivered += c.delivered || 0;
+        a.failed += c.failed || 0;
+        a.read += c.read || 0;
+
+        return a;
+      },
+      {
+        total: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+        read: 0,
+      },
+    );
 
     const byDayMap = {};
+
     campaigns.forEach((c) => {
-      const key = new Date(c.createdAt || Date.now()).toISOString().slice(0, 10);
-      if (!byDayMap[key]) byDayMap[key] = { date: key, sent: 0, delivered: 0, failed: 0, read: 0 };
+      const key = new Date(c.createdAt || Date.now())
+        .toISOString()
+        .slice(0, 10);
+
+      if (!byDayMap[key]) {
+        byDayMap[key] = {
+          date: key,
+          sent: 0,
+          delivered: 0,
+          failed: 0,
+          read: 0,
+        };
+      }
+
       byDayMap[key].sent += c.sent || 0;
       byDayMap[key].delivered += c.delivered || 0;
       byDayMap[key].failed += c.failed || 0;
       byDayMap[key].read += c.read || 0;
     });
 
-    res.json({
+    return res.json({
       success: true,
+
       data: {
         summary: {
           ...summary,
-          deliveryRate: summary.sent ? Number((summary.delivered / summary.sent * 100).toFixed(1)) : 0,
-          failRate: summary.total ? Number((summary.failed / summary.total * 100).toFixed(1)) : 0,
-          readRate: summary.delivered ? Number((summary.read / summary.delivered * 100).toFixed(1)) : 0,
+
+          deliveryRate: summary.sent
+            ? Number(((summary.delivered / summary.sent) * 100).toFixed(1))
+            : 0,
+
+          failRate: summary.total
+            ? Number(((summary.failed / summary.total) * 100).toFixed(1))
+            : 0,
+
+          readRate: summary.delivered
+            ? Number(((summary.read / summary.delivered) * 100).toFixed(1))
+            : 0,
         },
-        byDay: Object.values(byDayMap).sort((a,b) => a.date.localeCompare(b.date)),
+
+        byDay: Object.values(byDayMap).sort((a, b) =>
+          a.date.localeCompare(b.date),
+        ),
+
         campaigns: campaigns.map((c) => ({
-          id: c._id, name: c.name, status: c.status, total: c.recipients || 0,
-          sent: c.sent || 0, delivered: c.delivered || 0, failed: c.failed || 0, read: c.read || 0,
+          id: c._id,
+          name: c.name,
+          status: c.status,
+          total: c.recipients || 0,
+          sent: c.sent || 0,
+          delivered: c.delivered || 0,
+          failed: c.failed || 0,
+          read: c.read || 0,
         })),
       },
     });
-  } catch (e) { res.status(500).json({ success:false,message:e.message }); }
+  } catch (e) {
+    res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
 };
 
 module.exports = exports;
