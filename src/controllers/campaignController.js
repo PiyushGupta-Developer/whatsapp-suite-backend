@@ -962,5 +962,525 @@ exports.getReports = async (req, res) => {
     });
   }
 };
+// ============================================================
+// GET ALL SCHEDULES
+// GET /schedule
+// ============================================================
+exports.getSchedules = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { status, page = 1, limit = 10 } = req.query;
 
+    const filter = {
+      createdBy: userId,
+      scheduledAt: { $ne: null },
+    };
+
+    if (status && status !== "All Status") {
+      filter.status = status;
+    }
+
+    // ===============================
+    // MONGODB
+    // ===============================
+    if (isMongoConnected()) {
+      const p = Math.max(1, parseInt(page, 10));
+      const l = Math.min(100, Math.max(1, parseInt(limit, 10)));
+
+      const [schedules, total] = await Promise.all([
+        Campaign.find(filter)
+          .populate("device deviceIds contacts")
+          .sort({ scheduledAt: -1 })
+          .skip((p - 1) * l)
+          .limit(l),
+
+        Campaign.countDocuments(filter),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        count: schedules.length,
+        total,
+        page: p,
+        pages: Math.ceil(total / l),
+        data: schedules,
+      });
+    }
+
+    // ===============================
+    // MEMORY STORE
+    // ===============================
+    await init();
+
+    let schedules = store.campaigns.filter(
+      (campaign) =>
+        String(campaign.createdBy) === String(userId) &&
+        campaign.scheduledAt
+    );
+
+    if (status && status !== "All Status") {
+      schedules = schedules.filter(
+        (campaign) => campaign.status === status
+      );
+    }
+
+    schedules.sort(
+      (a, b) =>
+        new Date(b.scheduledAt) - new Date(a.scheduledAt)
+    );
+
+    return res.status(200).json({
+      success: true,
+      count: schedules.length,
+      total: schedules.length,
+      page: 1,
+      pages: 1,
+      data: schedules,
+    });
+
+  } catch (error) {
+    console.error("[Schedule] getSchedules error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+// ============================================================
+// GET SINGLE SCHEDULE
+// GET /schedule/:id
+// ============================================================
+exports.getSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const scheduleId = req.params.id;
+
+    // ===============================
+    // MONGODB
+    // ===============================
+    if (isMongoConnected()) {
+      const schedule = await Campaign.findOne({
+        _id: scheduleId,
+        createdBy: userId,
+        scheduledAt: { $ne: null },
+      }).populate("device deviceIds contacts");
+
+      if (!schedule) {
+        return res.status(404).json({
+          success: false,
+          message: "Schedule not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: schedule,
+      });
+    }
+
+    // ===============================
+    // MEMORY STORE
+    // ===============================
+    await init();
+
+    const schedule = store.campaigns.find(
+      (campaign) =>
+        String(campaign._id) === String(scheduleId) &&
+        String(campaign.createdBy) === String(userId) &&
+        campaign.scheduledAt
+    );
+
+    if (!schedule) {
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: schedule,
+    });
+
+  } catch (error) {
+    console.error("[Schedule] getSchedule error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+// ============================================================
+// UPDATE SCHEDULE
+// PUT /schedule/:id
+// ============================================================
+exports.updateSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const scheduleId = req.params.id;
+
+    // Security
+    delete req.body.createdBy;
+
+    // ===============================
+    // MONGODB
+    // ===============================
+    if (isMongoConnected()) {
+
+      const existingSchedule = await Campaign.findOne({
+        _id: scheduleId,
+        createdBy: userId,
+        scheduledAt: { $ne: null },
+      });
+
+      if (!existingSchedule) {
+        return res.status(404).json({
+          success: false,
+          message: "Schedule not found",
+        });
+      }
+
+      // Running / Completed ko edit nahi karenge
+      if (
+        existingSchedule.status === "Running" ||
+        existingSchedule.status === "Completed"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Running or completed schedule cannot be edited",
+        });
+      }
+
+      const updateData = {};
+
+      // NAME
+      if (req.body.name !== undefined) {
+        updateData.name = req.body.name;
+      }
+
+      // MESSAGE
+      if (req.body.message !== undefined) {
+        updateData.message = req.body.message;
+      }
+
+      // SEND TEXT
+      if (req.body.sendText !== undefined) {
+        updateData.sendText =
+          req.body.sendText === true ||
+          req.body.sendText === "true";
+      }
+
+      // SCHEDULE DATE
+      if (req.body.scheduledAt !== undefined) {
+        const scheduledDate = new Date(req.body.scheduledAt);
+
+        if (Number.isNaN(scheduledDate.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid scheduledAt",
+          });
+        }
+
+        if (scheduledDate <= new Date()) {
+          return res.status(400).json({
+            success: false,
+            message: "scheduledAt must be a future date and time",
+          });
+        }
+
+        updateData.scheduledAt = scheduledDate;
+        updateData.nextRunAt = scheduledDate;
+
+        updateData.status = "Scheduled";
+      }
+
+      // TIMEZONE
+      if (req.body.timezone !== undefined) {
+        updateData.timezone = req.body.timezone;
+      }
+
+      // REPEAT
+      if (req.body.repeat !== undefined) {
+        const allowedRepeats = [
+          "No Repeat",
+          "Daily",
+          "Weekly",
+          "Monthly",
+          "Custom",
+        ];
+
+        if (!allowedRepeats.includes(req.body.repeat)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid repeat value",
+          });
+        }
+
+        updateData.repeat = req.body.repeat;
+      }
+
+      // END DATE
+      if (req.body.endDate !== undefined) {
+        updateData.endDate =
+          req.body.endDate
+            ? new Date(req.body.endDate)
+            : null;
+      }
+
+      // DEVICE IDs
+      if (
+        req.body.deviceIds !== undefined ||
+        req.body.deviceId !== undefined
+      ) {
+        const parsedDeviceIds =
+          parseJsonField(req.body.deviceIds);
+
+        const ids =
+          Array.isArray(parsedDeviceIds) &&
+          parsedDeviceIds.length > 0
+            ? parsedDeviceIds
+            : req.body.deviceId
+              ? [req.body.deviceId]
+              : [];
+
+        updateData.deviceIds = ids;
+        updateData.device =
+          ids.length === 1
+            ? ids[0]
+            : undefined;
+      }
+
+      // RECIPIENTS
+      if (req.body.recipients !== undefined) {
+        const parsedRecipients =
+          parseJsonField(req.body.recipients);
+
+        if (!Array.isArray(parsedRecipients)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid recipients format",
+          });
+        }
+
+        const directRecipients =
+          parsedRecipients
+            .map((recipient) => ({
+              name: recipient.name || "",
+              phone:
+                recipient.phone ||
+                recipient.number ||
+                "",
+              whatsappId:
+                recipient.whatsappId ||
+                recipient.jid ||
+                "",
+            }))
+            .filter((recipient) => recipient.phone);
+
+        if (!directRecipients.length) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "At least one valid recipient is required",
+          });
+        }
+
+        updateData.directRecipients =
+          directRecipients;
+
+        updateData.contacts = [];
+
+        updateData.recipients =
+          directRecipients.length;
+      }
+
+      // ===============================
+      // EXISTING MEDIA
+      // ===============================
+      let finalMediaFiles =
+        Array.isArray(existingSchedule.mediaFiles)
+          ? [...existingSchedule.mediaFiles]
+          : [];
+
+      // mediaFiles JSON
+      if (req.body.mediaFiles !== undefined) {
+        const parsedMediaFiles =
+          parseJsonField(
+            req.body.mediaFiles,
+            []
+          );
+
+        if (Array.isArray(parsedMediaFiles)) {
+          finalMediaFiles =
+            parsedMediaFiles;
+        }
+      }
+
+      // NEW UPLOADED FILES
+      if (req.files && req.files.length > 0) {
+        const uploadedFiles =
+          req.files.map((file) => ({
+            filename: file.filename,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+            path: `/uploads/${file.filename}`,
+            type:
+              file.mimetype.startsWith("image/")
+                ? "Image"
+                : file.mimetype.startsWith("video/")
+                  ? "Video"
+                  : file.mimetype.startsWith("audio/")
+                    ? "Audio"
+                    : "Document",
+          }));
+
+        finalMediaFiles = [
+          ...finalMediaFiles,
+          ...uploadedFiles,
+        ];
+      }
+
+      updateData.mediaFiles =
+        finalMediaFiles;
+
+      // ===============================
+      // UPDATE
+      // ===============================
+      const updatedSchedule =
+        await Campaign.findOneAndUpdate(
+          {
+            _id: scheduleId,
+            createdBy: userId,
+            scheduledAt: { $ne: null },
+          },
+          updateData,
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+      return res.status(200).json({
+        success: true,
+        message: "Schedule updated successfully",
+        data: updatedSchedule,
+      });
+    }
+
+    // ===============================
+    // MEMORY STORE
+    // ===============================
+    await init();
+
+    const schedule = store.campaigns.find(
+      (campaign) =>
+        String(campaign._id) === String(scheduleId) &&
+        String(campaign.createdBy) === String(userId) &&
+        campaign.scheduledAt
+    );
+
+    if (!schedule) {
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found",
+      });
+    }
+
+    Object.assign(schedule, req.body, {
+      updatedAt: new Date().toISOString(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Schedule updated successfully",
+      data: schedule,
+    });
+
+  } catch (error) {
+    console.error("[Schedule] updateSchedule error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+// ============================================================
+// DELETE SCHEDULE
+// DELETE /schedule/:id
+// ============================================================
+exports.deleteSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const scheduleId = req.params.id;
+
+    // ===============================
+    // MONGODB
+    // ===============================
+    if (isMongoConnected()) {
+      const schedule =
+        await Campaign.findOneAndDelete({
+          _id: scheduleId,
+          createdBy: userId,
+          scheduledAt: { $ne: null },
+        });
+
+      if (!schedule) {
+        return res.status(404).json({
+          success: false,
+          message: "Schedule not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Schedule deleted successfully",
+      });
+    }
+
+    // ===============================
+    // MEMORY STORE
+    // ===============================
+    await init();
+
+    const index =
+      store.campaigns.findIndex(
+        (campaign) =>
+          String(campaign._id) === String(scheduleId) &&
+          String(campaign.createdBy) === String(userId) &&
+          campaign.scheduledAt
+      );
+
+    if (index === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found",
+      });
+    }
+
+    store.campaigns.splice(index, 1);
+
+    return res.status(200).json({
+      success: true,
+      message: "Schedule deleted successfully",
+    });
+
+  } catch (error) {
+    console.error("[Schedule] deleteSchedule error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 module.exports = exports;

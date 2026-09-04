@@ -250,7 +250,53 @@ router.post(
   media.upload.array('files', 10),
   h(campaigns.createCampaign, 'schedule')
 );
+// ================================
+// GET ALL SCHEDULES
+// ================================
 
+router.get(
+  '/schedule',
+  protect,
+  authorize('Administrator', 'Manager', 'Operator'),
+  h(campaigns.getSchedules, 'schedule.getAll')
+);
+
+
+// ================================
+// GET SINGLE SCHEDULE
+// ================================
+
+router.get(
+  '/schedule/:id',
+  protect,
+  authorize('Administrator', 'Manager', 'Operator'),
+  h(campaigns.getSchedule, 'schedule.get')
+);
+
+
+// ================================
+// UPDATE SCHEDULE
+// ================================
+
+router.put(
+  '/schedule/:id',
+  protect,
+  authorize('Administrator', 'Manager', 'Operator'),
+  media.upload.array('files', 10),
+  h(campaigns.updateSchedule, 'schedule.update')
+);
+
+
+// ================================
+// DELETE SCHEDULE
+// ================================
+
+router.delete(
+  '/schedule/:id',
+  protect,
+  authorize('Administrator', 'Manager', 'Operator'),
+  h(campaigns.deleteSchedule, 'schedule.delete')
+);
 // ================================
 // BULK API
 // ================================
