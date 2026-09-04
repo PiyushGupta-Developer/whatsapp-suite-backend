@@ -432,7 +432,15 @@ router.post(
     'contacts.scheduleOneDayReminder'
   )
 );
-
+// BULK 1-DAY-BEFORE WHATSAPP REMINDER
+router.post(
+  '/contacts/bulk-one-day-reminder',
+  protect,
+  h(
+    contacts.scheduleBulkOneDayReminder,
+    'contacts.scheduleBulkOneDayReminder'
+  )
+);
 
 // done
 router.put(

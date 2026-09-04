@@ -1015,6 +1015,121 @@ exports.scheduleOneDayReminder = async (req, res) => {
   }
 };
 
+
+// ============================================
+// BULK 1-DAY-BEFORE WHATSAPP REMINDER
+// ============================================
+
+exports.scheduleBulkOneDayReminder = async (req, res) => {
+  try {
+    const {
+      contactIds,
+      eventDate,
+      message,
+      deviceId,
+    } = req.body;
+
+    // Validation
+    if (
+      !Array.isArray(contactIds) ||
+      contactIds.length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select at least one contact',
+      });
+    }
+
+    if (!eventDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Event date is required',
+      });
+    }
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reminder message is required',
+      });
+    }
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message: 'WhatsApp device is required',
+      });
+    }
+
+    // Parse event date
+    const event = new Date(eventDate);
+
+    if (Number.isNaN(event.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid event date',
+      });
+    }
+
+    // Event must be in future
+    if (event <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Event date must be in the future',
+      });
+    }
+
+    // Calculate reminder exactly 24 hours before
+    const reminderAt = new Date(
+      event.getTime() - 24 * 60 * 60 * 1000
+    );
+
+    // Update all selected contacts
+    const result = await Contact.updateMany(
+      {
+        _id: { $in: contactIds },
+        status: {
+          $nin: ['Blocked', 'Unsubscribed'],
+        },
+      },
+      {
+        $set: {
+          date: event,
+          meetingCallDate: event,
+          reminderAt,
+          reminderSentAt: null,
+          reminderMessage: message.trim(),
+          reminderDeviceId: deviceId,
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reminder scheduled successfully',
+      data: {
+        selectedContacts: contactIds.length,
+        updatedContacts: result.modifiedCount,
+        eventDate: event,
+        reminderAt,
+        deviceId,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      '[BULK REMINDER] Error:',
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to schedule reminder',
+    });
+  }
+};
+
+
 exports.getContactTags = async (req, res) => {
   try {
     const userId = req.user._id;
