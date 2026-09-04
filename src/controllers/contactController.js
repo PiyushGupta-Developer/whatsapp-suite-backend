@@ -1015,7 +1015,6 @@ exports.scheduleOneDayReminder = async (req, res) => {
   }
 };
 
-
 // ============================================
 // BULK 1-DAY-BEFORE WHATSAPP REMINDER
 // ============================================
@@ -1061,7 +1060,10 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
       });
     }
 
-    // Parse event date
+    // ==========================================
+    // PARSE EVENT DATE
+    // ==========================================
+
     const event = new Date(eventDate);
 
     if (Number.isNaN(event.getTime())) {
@@ -1079,12 +1081,19 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
       });
     }
 
-    // Calculate reminder exactly 24 hours before
+    // ==========================================
+    // CALCULATE REMINDER TIME
+    // EXACTLY 24 HOURS BEFORE
+    // ==========================================
+
     const reminderAt = new Date(
       event.getTime() - 24 * 60 * 60 * 1000
     );
 
-    // Update all selected contacts
+    // ==========================================
+    // UPDATE CONTACTS
+    // ==========================================
+
     const result = await Contact.updateMany(
       {
         _id: { $in: contactIds },
@@ -1099,20 +1108,55 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
           reminderAt,
           reminderSentAt: null,
           reminderMessage: message.trim(),
-          reminderDeviceId: deviceId,
+          reminderDeviceId: String(deviceId),
         },
       }
     );
 
+    // ==========================================
+    // FETCH UPDATED CONTACTS
+    // ==========================================
+
+    const updatedContacts = await Contact.find({
+      _id: { $in: contactIds },
+      status: {
+        $nin: ['Blocked', 'Unsubscribed'],
+      },
+    }).select(
+      '_id name phone reminderMessage reminderAt reminderDeviceId meetingCallDate'
+    );
+
+    // ==========================================
+    // CREATE INDIVIDUAL RESPONSE DATA
+    // ==========================================
+
+    const contacts = updatedContacts.map((contact) => ({
+      contactId: contact._id,
+      contactName: contact.name,
+      phone: contact.phone,
+      eventDate: event.toISOString(),
+      reminderAt: reminderAt.toISOString(),
+      deviceId: String(deviceId),
+      reminderMessage: message.trim(),
+    }));
+
+    // ==========================================
+    // RESPONSE
+    // ==========================================
+
     return res.status(200).json({
       success: true,
       message: 'Reminder scheduled successfully',
+
       data: {
         selectedContacts: contactIds.length,
         updatedContacts: result.modifiedCount,
-        eventDate: event,
-        reminderAt,
-        deviceId,
+
+        eventDate: event.toISOString(),
+        reminderAt: reminderAt.toISOString(),
+        deviceId: String(deviceId),
+
+        contacts: contacts,
       },
     });
 
@@ -1124,7 +1168,9 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to schedule reminder',
+      message:
+        error.message ||
+        'Failed to schedule reminder',
     });
   }
 };
