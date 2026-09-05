@@ -35,13 +35,13 @@ const sendFixedWhatsAppReminders = async (contact) => {
       return;
     }
 
-    const eventDate = contact.eventDate
-      ? new Date(contact.eventDate).toLocaleString("en-IN", {
-          timeZone: "Asia/Kolkata",
-          dateStyle: "medium",
-          timeStyle: "short",
-        })
-      : "N/A";
+   const eventDate = contact.meetingCallDate
+     ? new Date(contact.meetingCallDate).toLocaleString("en-IN", {
+         timeZone: "Asia/Kolkata",
+         dateStyle: "medium",
+         timeStyle: "short",
+       })
+     : "N/A";
 
     const reminderTime = contact.reminderAt
       ? new Date(contact.reminderAt).toLocaleString("en-IN", {
@@ -54,7 +54,6 @@ const sendFixedWhatsAppReminders = async (contact) => {
     const notificationMessage = `
 🔔 REMINDER ALERT
 
-👤 Contact Name: ${contact.name || "N/A"}
 📱 Contact Phone: ${contact.phone || "N/A"}
 
 📅 Event Date & Time: ${eventDate}

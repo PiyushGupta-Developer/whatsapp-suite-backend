@@ -1199,7 +1199,160 @@ exports.getContactsByTab = async (req, res) => {
     });
   }
 };
+exports.assignContactsToTab = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { tabId } = req.params;
+    const { contactIds } = req.body;
 
+    // =========================
+    // VALIDATE CONTACT IDS
+    // =========================
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select at least one contact",
+      });
+    }
+
+    // =========================
+    // MONGODB MODE
+    // =========================
+    if (isMongoConnected()) {
+      // Check tab belongs to logged-in user
+      const contactTab = await ContactList.findOne({
+        _id: tabId,
+        createdBy: userId,
+      });
+
+      if (!contactTab) {
+        return res.status(404).json({
+          success: false,
+          message: "Contact tab not found",
+        });
+      }
+
+      // Check selected contacts belong to logged-in user
+      const contacts = await Contact.find({
+        _id: { $in: contactIds },
+        createdBy: userId,
+      });
+
+      if (contacts.length !== contactIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more selected contacts are invalid",
+        });
+      }
+
+      // Add existing tab ID to selected contacts
+      await Contact.updateMany(
+        {
+          _id: { $in: contactIds },
+          createdBy: userId,
+        },
+        {
+          $addToSet: {
+            lists: tabId,
+          },
+        },
+      );
+
+      // Get total contacts inside this tab
+      const contactCount = await Contact.countDocuments({
+        lists: tabId,
+        createdBy: userId,
+      });
+
+      // Update tab contact count
+      contactTab.contactCount = contactCount;
+      await contactTab.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Contacts assigned to tab successfully",
+        data: {
+          tabId: contactTab._id,
+          tabName: contactTab.name,
+          assignedContacts: contactIds.length,
+          totalContacts: contactCount,
+        },
+      });
+    }
+
+    // =========================
+    // MEMORY MODE
+    // =========================
+    await init();
+
+    const contactTab = (store.contactLists || []).find(
+      (tab) =>
+        String(tab._id) === String(tabId) &&
+        String(tab.createdBy) === String(userId),
+    );
+
+    if (!contactTab) {
+      return res.status(404).json({
+        success: false,
+        message: "Contact tab not found",
+      });
+    }
+
+    const selectedContacts = (store.contacts || []).filter(
+      (contact) =>
+        contactIds.includes(String(contact._id)) &&
+        String(contact.createdBy) === String(userId),
+    );
+
+    if (selectedContacts.length !== contactIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more selected contacts are invalid",
+      });
+    }
+
+    // Add tab to contacts
+    selectedContacts.forEach((contact) => {
+      contact.lists = contact.lists || [];
+
+      const alreadyExists = contact.lists.some(
+        (listId) => String(listId) === String(tabId),
+      );
+
+      if (!alreadyExists) {
+        contact.lists.push(tabId);
+      }
+    });
+
+    // Update contact count
+    const contactCount = (store.contacts || []).filter(
+      (contact) =>
+        String(contact.createdBy) === String(userId) &&
+        Array.isArray(contact.lists) &&
+        contact.lists.some((listId) => String(listId) === String(tabId)),
+    ).length;
+
+    contactTab.contactCount = contactCount;
+
+    return res.status(200).json({
+      success: true,
+      message: "Contacts assigned to tab successfully",
+      data: {
+        tabId: contactTab._id,
+        tabName: contactTab.name,
+        assignedContacts: contactIds.length,
+        totalContacts: contactCount,
+      },
+    });
+  } catch (error) {
+    console.error("[ASSIGN CONTACTS TO TAB ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 
 exports.scheduleOneDayReminder = async (req, res) => {
   try {

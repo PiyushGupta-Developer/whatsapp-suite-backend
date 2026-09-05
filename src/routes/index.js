@@ -528,6 +528,12 @@ router.delete(
   protect,
   h(contacts.deleteContactTab, "contacts.deleteContactTab"),
 );
+router.post(
+  "/contact-tab/:tabId/contacts",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  h(contacts.assignContactsToTab, "contact-tab.assignContactsToTab"),
+);
 
 // ============================================================
 // NOTEBOOK / NOTES
