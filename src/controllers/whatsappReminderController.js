@@ -1,32 +1,14 @@
 const WhatsAppReminder = require("../models/WhatsAppReminder");
 
-/**
- * Add or update fixed WhatsApp reminder numbers.
- * Maximum 2 numbers allowed.
- */
 const saveWhatsAppReminderNumbers = async (req, res) => {
   try {
-    const { phoneNumbers, deviceId } = req.body;
+    const { phoneNumbers } = req.body;
 
-    // Validation
+    // Validation: phoneNumbers must be an array
     if (!Array.isArray(phoneNumbers)) {
       return res.status(400).json({
         success: false,
         message: "phoneNumbers must be an array",
-      });
-    }
-
-    if (phoneNumbers.length < 1 || phoneNumbers.length > 2) {
-      return res.status(400).json({
-        success: false,
-        message: "Only 1 or 2 phone numbers are allowed",
-      });
-    }
-
-    if (!deviceId) {
-      return res.status(400).json({
-        success: false,
-        message: "deviceId is required",
       });
     }
 
@@ -35,25 +17,26 @@ const saveWhatsAppReminderNumbers = async (req, res) => {
       .map((phone) => String(phone).trim())
       .filter(Boolean);
 
+    // Maximum 2 numbers allowed
     if (cleanedNumbers.length < 1 || cleanedNumbers.length > 2) {
       return res.status(400).json({
         success: false,
-        message: "Please provide valid 1 or 2 phone numbers",
+        message: "Only 1 or 2 valid phone numbers are allowed",
       });
     }
 
-    // Only ONE settings document
+    // Find existing settings document
     let reminderSettings = await WhatsAppReminder.findOne();
 
     if (reminderSettings) {
+      // Update existing numbers
       reminderSettings.phoneNumbers = cleanedNumbers;
-      reminderSettings.deviceId = String(deviceId);
 
       await reminderSettings.save();
     } else {
+      // Create new settings
       reminderSettings = await WhatsAppReminder.create({
         phoneNumbers: cleanedNumbers,
-        deviceId: String(deviceId),
       });
     }
 

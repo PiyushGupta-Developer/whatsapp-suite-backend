@@ -18,28 +18,40 @@ const sendFixedWhatsAppReminders = async (contact) => {
       return;
     }
 
-    const { phoneNumbers, deviceId } = settings;
+    const { phoneNumbers } = settings;
 
     if (!phoneNumbers || phoneNumbers.length === 0) {
       return;
     }
-const eventDate = contact.eventDate
-  ? new Date(contact.eventDate).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      dateStyle: "medium",
-      timeStyle: "short",
-    })
-  : "N/A";
 
-const reminderTime = contact.reminderAt
-  ? new Date(contact.reminderAt).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      dateStyle: "medium",
-      timeStyle: "short",
-    })
-  : "N/A";
+    // जिस WhatsApp device से original reminder send होना है
+    const deviceId = contact.reminderDeviceId;
 
-const notificationMessage = `
+    if (!deviceId) {
+      console.log(
+        "[WHATSAPP REMINDER] reminderDeviceId not found for contact:",
+        contact._id,
+      );
+      return;
+    }
+
+    const eventDate = contact.eventDate
+      ? new Date(contact.eventDate).toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          dateStyle: "medium",
+          timeStyle: "short",
+        })
+      : "N/A";
+
+    const reminderTime = contact.reminderAt
+      ? new Date(contact.reminderAt).toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          dateStyle: "medium",
+          timeStyle: "short",
+        })
+      : "N/A";
+
+    const notificationMessage = `
 🔔 REMINDER ALERT
 
 👤 Contact Name: ${contact.name || "N/A"}
@@ -49,7 +61,7 @@ const notificationMessage = `
 
 ⏰ Reminder Time: ${reminderTime}
 
-📝 Message: ${contact.reminderMessage}
+📝 Message: ${contact.reminderMessage || "N/A"}
 `.trim();
 
     for (const phone of phoneNumbers) {

@@ -12,11 +12,6 @@ const whatsAppReminderSchema = new mongoose.Schema(
         message: "Only 1 or 2 phone numbers are allowed",
       },
     },
-
-    deviceId: {
-      type: String,
-      required: true,
-    },
   },
   {
     timestamps: true,
