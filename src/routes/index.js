@@ -507,7 +507,12 @@ router.post(
   protect,
   h(contacts.createList, 'contacts.createList')
 );
-
+router.get(
+  "/contact-tab/:tabId/contacts",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  h(contacts.getContactsByTab, "contact-tab/:tabId/contacts"),
+);
 router.post(
   "/contact-tab",
   protect,

@@ -1115,6 +1115,92 @@ exports.deleteContactTab = async (req, res) => {
   }
 };
 
+exports.getContactsByTab = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { tabId } = req.params;
+
+    // =========================
+    // MongoDB Mode
+    // =========================
+    if (isMongoConnected()) {
+      // Check tab belongs to logged-in user
+      const contactTab = await ContactList.findOne({
+        _id: tabId,
+        createdBy: userId,
+      });
+
+      if (!contactTab) {
+        return res.status(404).json({
+          success: false,
+          message: "Contact tab not found",
+        });
+      }
+
+      // Get contacts belonging to this tab
+      const contacts = await Contact.find({
+        lists: tabId,
+        createdBy: userId,
+      }).sort({
+        createdAt: -1,
+      });
+
+      return res.status(200).json({
+        success: true,
+        tab: {
+          _id: contactTab._id,
+          name: contactTab.name,
+        },
+        count: contacts.length,
+        data: contacts,
+      });
+    }
+
+    // =========================
+    // Memory Mode
+    // =========================
+    await init();
+
+    const contactTab = (store.contactLists || []).find(
+      (tab) =>
+        String(tab._id) === String(tabId) &&
+        String(tab.createdBy) === String(userId),
+    );
+
+    if (!contactTab) {
+      return res.status(404).json({
+        success: false,
+        message: "Contact tab not found",
+      });
+    }
+
+    const contacts = (store.contacts || []).filter(
+      (contact) =>
+        String(contact.createdBy) === String(userId) &&
+        Array.isArray(contact.lists) &&
+        contact.lists.some((listId) => String(listId) === String(tabId)),
+    );
+
+    return res.status(200).json({
+      success: true,
+      tab: {
+        _id: contactTab._id,
+        name: contactTab.name,
+      },
+      count: contacts.length,
+      data: contacts,
+    });
+  } catch (error) {
+    console.error("[GET CONTACTS BY TAB ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
 exports.scheduleOneDayReminder = async (req, res) => {
   try {
     const { eventDate, message, deviceId } = req.body;
