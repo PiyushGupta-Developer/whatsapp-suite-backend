@@ -319,7 +319,13 @@ router.post(
   media.upload.array('files', 10),
   h(campaigns.createCampaign, 'bulk-schedule')
 );
-
+router.post(
+  "/bulk-contact-send-message",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  media.upload.array("files", 10),
+  h(campaigns.bulkContactSendMessage, "bulk-contact-send-message"),
+);
 router.get(
   '/campaigns/:id',
   protect,

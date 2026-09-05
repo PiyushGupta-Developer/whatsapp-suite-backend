@@ -474,6 +474,174 @@ console.log("Final media files:", finalMediaFiles);
     });
   }
 };
+
+exports.bulkContactSendMessage = async (req, res) => {
+  try {
+    const {
+      name,
+      message = "",
+      mediaFiles = [],
+      recipients,
+      contacts,
+      contactIds,
+      deviceId,
+      deviceIds,
+      sendText = true,
+    } = req.body;
+
+    // Existing mediaFiles from JSON body
+    let finalMediaFiles = Array.isArray(mediaFiles) ? mediaFiles : [];
+
+    // Files uploaded through API
+    if (req.files && req.files.length > 0) {
+      const uploadedFiles = req.files.map((file) => ({
+        filename: file.filename,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        path: `/uploads/${file.filename}`,
+        type: file.mimetype.startsWith("image/")
+          ? "Image"
+          : file.mimetype.startsWith("video/")
+            ? "Video"
+            : file.mimetype.startsWith("audio/")
+              ? "Audio"
+              : "Document",
+      }));
+
+      finalMediaFiles = [...finalMediaFiles, ...uploadedFiles];
+    }
+
+    // Parse recipients
+    const parsedRecipients = parseJsonField(recipients);
+    const parsedContacts = parseJsonField(contacts);
+    const parsedContactIds = parseJsonField(contactIds);
+
+    const recipientInput =
+      parsedRecipients.length > 0
+        ? parsedRecipients
+        : parsedContacts.length > 0
+          ? parsedContacts
+          : parsedContactIds;
+
+    const body = {
+      ...req.body,
+      recipients: recipientInput,
+    };
+
+    // Get complete contact list
+    const list = await expandRecipients(body, req.user._id);
+
+    // Validate message or media
+    if (!message && !finalMediaFiles.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Message or mediaFiles required",
+      });
+    }
+
+    // Validate contacts
+    if (!list.length) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one recipient/contact is required",
+      });
+    }
+
+    // Parse devices
+    const parsedDeviceIds = parseJsonField(deviceIds);
+
+    const ids =
+      Array.isArray(parsedDeviceIds) && parsedDeviceIds.length > 0
+        ? parsedDeviceIds
+        : deviceId
+          ? [deviceId]
+          : [];
+
+    // Device validation
+    if (!ids.length) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one WhatsApp device is required",
+      });
+    }
+
+    const data = {
+      name: name || `Bulk Contact Message ${new Date().toISOString()}`,
+
+      message,
+      sendText: sendText !== false,
+
+      mediaFiles: finalMediaFiles,
+
+      recipients: list.length,
+      sent: 0,
+      delivered: 0,
+      read: 0,
+      failed: 0,
+
+      // Immediately sending
+      status: "Running",
+
+      // NO scheduledAt
+      scheduledAt: null,
+      nextRunAt: null,
+
+      device: ids.length === 1 ? ids[0] : undefined,
+      deviceIds: ids,
+
+      contacts: isMongoConnected()
+        ? list.map((x) => x._id).filter(Boolean)
+        : [],
+
+      directRecipients: list
+        .filter((x) => !x._id)
+        .map((x) => ({
+          name: x.name || "",
+          phone: x.phone || x.number || "",
+          whatsappId: x.whatsappId || x.jid || "",
+        })),
+
+      estimatedTimeMinutes: Math.ceil(
+        list.length / Math.max(1, ids.length) / 80,
+      ),
+    };
+
+    // Save campaign
+    const campaign = await persistCampaign(data, req);
+
+    // Send immediately in background
+    executeCampaign(campaign, list).catch(async (e) => {
+      console.error("[Bulk Contact Message] send error:", e.message);
+
+      if (isMongoConnected()) {
+        await Campaign.findByIdAndUpdate(campaign._id, {
+          status: "Failed",
+          failed: list.length,
+          completedAt: new Date(),
+        });
+      } else {
+        campaign.status = "Failed";
+        campaign.failed = list.length;
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Bulk contact message accepted and sending in background",
+      data: campaign,
+      queued: list.length,
+    });
+  } catch (error) {
+    console.error("[Bulk Contact Message] error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.updateCampaign = async (req, res) => {
   try {
     const userId = req.user._id;
