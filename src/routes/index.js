@@ -11,6 +11,7 @@ const m4 = require('../controllers/module4Controller');
 const m5 = require('../controllers/module5Controller');
 const tools = require('../controllers/toolsController');
 const waContacts = require('../controllers/waContactsController');
+const whatsappReminderController = require("../controllers/whatsappReminderController");
 const notifications = require('../controllers/notificationController');
 const h = (fn, name) =>
   typeof fn === 'function'
@@ -418,7 +419,13 @@ router.post(
   protect,
   h(contacts.createContact, 'contacts.create')
 );
-
+router.post(
+  "/whatsapp-reminder",
+  h(
+    whatsappReminderController.saveWhatsAppReminderNumbers,
+    "whatsappReminder.saveWhatsAppReminderNumbers",
+  ),
+);
 // ============================================================
 // 1-DAY-BEFORE WHATSAPP REMINDER
 // ============================================================

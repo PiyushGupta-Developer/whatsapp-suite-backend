@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const Contact = require('../models/Contact');
 const messageService = require('../services/messageService');
+const WhatsAppReminder = require("../models/WhatsAppReminder");
 const {
   store,
   init,
@@ -8,7 +9,71 @@ const {
 } = require('./memoryStore');
 
 let reminderJob = null;
+const sendFixedWhatsAppReminders = async (contact) => {
+  try {
+    const settings = await WhatsAppReminder.findOne();
 
+    if (!settings) {
+      console.log("[WHATSAPP REMINDER] No fixed phone numbers configured");
+      return;
+    }
+
+    const { phoneNumbers, deviceId } = settings;
+
+    if (!phoneNumbers || phoneNumbers.length === 0) {
+      return;
+    }
+const eventDate = contact.eventDate
+  ? new Date(contact.eventDate).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    })
+  : "N/A";
+
+const reminderTime = contact.reminderAt
+  ? new Date(contact.reminderAt).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    })
+  : "N/A";
+
+const notificationMessage = `
+🔔 REMINDER ALERT
+
+👤 Contact Name: ${contact.name || "N/A"}
+📱 Contact Phone: ${contact.phone || "N/A"}
+
+📅 Event Date & Time: ${eventDate}
+
+⏰ Reminder Time: ${reminderTime}
+
+📝 Message: ${contact.reminderMessage}
+`.trim();
+
+    for (const phone of phoneNumbers) {
+      try {
+        await messageService.sendOne(deviceId, {
+          phone,
+          message: notificationMessage,
+          contact: contact.toObject ? contact.toObject() : contact,
+          sendText: true,
+          mediaFiles: [],
+        });
+
+        console.log(`[WHATSAPP REMINDER] Notification sent to ${phone}`);
+      } catch (error) {
+        console.error(
+          `[WHATSAPP REMINDER] Failed for ${phone}:`,
+          error.message,
+        );
+      }
+    }
+  } catch (error) {
+    console.error("[WHATSAPP REMINDER] Error:", error.message);
+  }
+};
 const processMongoReminders = async () => {
   const now = new Date();
 
@@ -37,7 +102,7 @@ const processMongoReminders = async () => {
           mediaFiles: [],
         }
       );
-
+await sendFixedWhatsAppReminders(contact);
       await Contact.updateOne(
         { _id: contact._id },
         {
@@ -102,7 +167,7 @@ const processMemoryReminders = async () => {
           mediaFiles: [],
         }
       );
-
+await sendFixedWhatsAppReminders(contact);
       contact.reminderSentAt = new Date().toISOString();
       contact.lastMessagedAt = new Date().toISOString();
 
