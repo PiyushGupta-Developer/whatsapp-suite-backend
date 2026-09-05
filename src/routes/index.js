@@ -502,6 +502,22 @@ router.post(
   h(contacts.createList, 'contacts.createList')
 );
 
+router.post(
+  "/contact-tab",
+  protect,
+  h(contacts.createContactTab, "contacts.createContactTab"),
+);
+router.get(
+  "/contact-tab",
+  protect,
+  h(contacts.getContactTabs, "contacts.getContactTabs"),
+);
+router.delete(
+  "/contact-tab/:tabId",
+  protect,
+  h(contacts.deleteContactTab, "contacts.deleteContactTab"),
+);
+
 // ============================================================
 // NOTEBOOK / NOTES
 // ============================================================

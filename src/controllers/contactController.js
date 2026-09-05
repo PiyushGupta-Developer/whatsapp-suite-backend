@@ -855,6 +855,266 @@ exports.createList = async (req, res) => {
   }
 };
 
+exports.createContactTab = async (req, res) => {
+  try {
+    const { name, contactIds = [] } = req.body;
+    const userId = req.user._id;
+
+    // 1. Tab name validation
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Tab name is required",
+      });
+    }
+
+    // 2. At least one contact required
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select at least one contact",
+      });
+    }
+
+    // =========================
+    // MongoDB Mode
+    // =========================
+    if (isMongoConnected()) {
+      // 3. Check selected contacts belong to logged-in user
+      const contacts = await Contact.find({
+        _id: { $in: contactIds },
+        createdBy: userId,
+      });
+
+      // Invalid contact check
+      if (contacts.length !== contactIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more selected contacts are invalid",
+        });
+      }
+
+      // 4. Create Contact Tab
+      const contactTab = await ContactList.create({
+        name: name.trim(),
+        contactCount: contacts.length,
+        createdBy: userId,
+      });
+
+      // 5. Add Tab ID into selected contacts
+      await Contact.updateMany(
+        {
+          _id: { $in: contactIds },
+          createdBy: userId,
+        },
+        {
+          $addToSet: {
+            lists: contactTab._id,
+          },
+        },
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: "Contact tab created successfully",
+        data: contactTab,
+      });
+    }
+
+    // =========================
+    // Memory Mode
+    // =========================
+    await init();
+
+    store.contactLists = store.contactLists || [];
+
+    // User ke contacts filter karo
+    const selectedContacts = store.contacts.filter(
+      (contact) =>
+        contactIds.includes(String(contact._id)) &&
+        String(contact.createdBy) === String(userId),
+    );
+
+    if (selectedContacts.length !== contactIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more selected contacts are invalid",
+      });
+    }
+
+    // Create Tab
+    const contactTab = {
+      _id: `tab_${Date.now()}`,
+      name: name.trim(),
+      contactCount: selectedContacts.length,
+      createdBy: userId,
+      createdAt: new Date().toISOString(),
+    };
+
+    store.contactLists.unshift(contactTab);
+
+    // Add tab ID into contacts
+    selectedContacts.forEach((contact) => {
+      contact.lists = contact.lists || [];
+
+      if (!contact.lists.includes(contactTab._id)) {
+        contact.lists.push(contactTab._id);
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Contact tab created successfully",
+      data: contactTab,
+    });
+  } catch (error) {
+    console.error("[CREATE CONTACT TAB ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+exports.getContactTabs = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // =========================
+    // MongoDB Mode
+    // =========================
+    if (isMongoConnected()) {
+      const contactTabs = await ContactList.find({
+        createdBy: userId,
+      }).sort({
+        createdAt: -1,
+      });
+
+      return res.status(200).json({
+        success: true,
+        count: contactTabs.length,
+        data: contactTabs,
+      });
+    }
+
+    // =========================
+    // Memory Mode
+    // =========================
+    await init();
+
+    const contactTabs = (store.contactLists || [])
+      .filter((tab) => String(tab.createdBy) === String(userId))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    return res.status(200).json({
+      success: true,
+      count: contactTabs.length,
+      data: contactTabs,
+    });
+  } catch (error) {
+    console.error("[GET CONTACT TABS ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+exports.deleteContactTab = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { tabId } = req.params;
+
+    // =========================
+    // MongoDB Mode
+    // =========================
+    if (isMongoConnected()) {
+      // Check tab belongs to logged-in user
+      const contactTab = await ContactList.findOne({
+        _id: tabId,
+        createdBy: userId,
+      });
+
+      if (!contactTab) {
+        return res.status(404).json({
+          success: false,
+          message: "Contact tab not found",
+        });
+      }
+
+      // Remove this tab ID from all contacts
+      await Contact.updateMany(
+        {
+          lists: contactTab._id,
+          createdBy: userId,
+        },
+        {
+          $pull: {
+            lists: contactTab._id,
+          },
+        },
+      );
+
+      // Delete the tab
+      await ContactList.findByIdAndDelete(contactTab._id);
+
+      return res.status(200).json({
+        success: true,
+        message: "Contact tab deleted successfully",
+      });
+    }
+
+    // =========================
+    // Memory Mode
+    // =========================
+    await init();
+
+    const tabIndex = (store.contactLists || []).findIndex(
+      (tab) =>
+        String(tab._id) === String(tabId) &&
+        String(tab.createdBy) === String(userId),
+    );
+
+    if (tabIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Contact tab not found",
+      });
+    }
+
+    // Remove tab ID from contacts
+    (store.contacts || []).forEach((contact) => {
+      if (
+        String(contact.createdBy) === String(userId) &&
+        Array.isArray(contact.lists)
+      ) {
+        contact.lists = contact.lists.filter(
+          (listId) => String(listId) !== String(tabId),
+        );
+      }
+    });
+
+    // Delete tab
+    store.contactLists.splice(tabIndex, 1);
+
+    return res.status(200).json({
+      success: true,
+      message: "Contact tab deleted successfully",
+    });
+  } catch (error) {
+    console.error("[DELETE CONTACT TAB ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.scheduleOneDayReminder = async (req, res) => {
   try {
     const { eventDate, message, deviceId } = req.body;
