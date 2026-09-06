@@ -9,6 +9,7 @@ const {
 } = require('./memoryStore');
 
 let reminderJob = null;
+let isProcessingReminders = false;
 const sendFixedWhatsAppReminders = async (contact) => {
   try {
     const settings = await WhatsAppReminder.findOne();
@@ -126,7 +127,7 @@ await sendFixedWhatsAppReminders(contact);
 
       console.log(
         `[REMINDER] WhatsApp sent successfully to ${contact.phone}`,
-        result?.key?.id || ''
+        result?.messageId || ''
       );
     } catch (error) {
       console.error(
@@ -184,7 +185,7 @@ await sendFixedWhatsAppReminders(contact);
 
       console.log(
         `[REMINDER] WhatsApp sent successfully to ${contact.phone}`,
-        result?.key?.id || ''
+        result?.messageId || ''
       );
     } catch (error) {
       console.error(
@@ -196,6 +197,16 @@ await sendFixedWhatsAppReminders(contact);
 };
 
 const processReminders = async () => {
+  // Prevent overlapping cron executions
+  if (isProcessingReminders) {
+    console.log(
+      "[REMINDER] Previous reminder process is still running. Skipping this cron cycle.",
+    );
+    return;
+  }
+
+  isProcessingReminders = true;
+
   try {
     if (isMongoConnected()) {
       await processMongoReminders();
@@ -203,10 +214,9 @@ const processReminders = async () => {
       await processMemoryReminders();
     }
   } catch (error) {
-    console.error(
-      '[REMINDER] Scheduler error:',
-      error.message
-    );
+    console.error("[REMINDER] Scheduler error:", error.message);
+  } finally {
+    isProcessingReminders = false;
   }
 };
 

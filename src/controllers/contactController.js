@@ -1518,6 +1518,166 @@ exports.scheduleOneDayReminder = async (req, res) => {
 // BULK 1-DAY-BEFORE WHATSAPP REMINDER
 // ============================================
 
+// exports.scheduleBulkOneDayReminder = async (req, res) => {
+//   try {
+//     const {
+//       contactIds,
+//       eventDate,
+//       message,
+//       deviceId,
+//     } = req.body;
+
+//     // Validation
+//     if (
+//       !Array.isArray(contactIds) ||
+//       contactIds.length === 0
+//     ) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Please select at least one contact',
+//       });
+//     }
+
+//     if (!eventDate) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Event date is required',
+//       });
+//     }
+
+//     if (!message || !message.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Reminder message is required',
+//       });
+//     }
+
+//     if (!deviceId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'WhatsApp device is required',
+//       });
+//     }
+
+//     // ==========================================
+//     // PARSE EVENT DATE
+//     // ==========================================
+
+//     const event = new Date(eventDate);
+
+//     if (Number.isNaN(event.getTime())) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Invalid event date',
+//       });
+//     }
+
+//     // Event must be in future
+//     if (event <= new Date()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Event date must be in the future',
+//       });
+//     }
+
+//     // ==========================================
+//     // CALCULATE REMINDER TIME
+//     // EXACTLY 24 HOURS BEFORE
+//     // ==========================================
+
+//     const reminderAt = new Date(
+//       event.getTime() - 24 * 60 * 60 * 1000
+//     );
+
+//     // ==========================================
+//     // UPDATE CONTACTS
+//     // ==========================================
+
+//     const result = await Contact.updateMany(
+//       {
+//         _id: { $in: contactIds },
+//         status: {
+//           $nin: ['Blocked', 'Unsubscribed'],
+//         },
+//       },
+//       {
+//         $set: {
+//           date: event,
+//           meetingCallDate: event,
+//           reminderAt,
+//           reminderSentAt: null,
+//           reminderMessage: message.trim(),
+//           reminderDeviceId: String(deviceId),
+//         },
+//       }
+//     );
+
+//     // ==========================================
+//     // FETCH UPDATED CONTACTS
+//     // ==========================================
+
+//     const updatedContacts = await Contact.find({
+//       _id: { $in: contactIds },
+//       status: {
+//         $nin: ['Blocked', 'Unsubscribed'],
+//       },
+//     }).select(
+//       '_id name phone reminderMessage reminderAt reminderDeviceId meetingCallDate'
+//     );
+
+//     // ==========================================
+//     // CREATE INDIVIDUAL RESPONSE DATA
+//     // ==========================================
+
+//     const contacts = updatedContacts.map((contact) => ({
+//       contactId: contact._id,
+//       contactName: contact.name,
+//       phone: contact.phone,
+//       eventDate: event.toISOString(),
+//       reminderAt: reminderAt.toISOString(),
+//       deviceId: String(deviceId),
+//       reminderMessage: message.trim(),
+//     }));
+
+//     // ==========================================
+//     // RESPONSE
+//     // ==========================================
+
+//     return res.status(200).json({
+//       success: true,
+//       message: 'Reminder scheduled successfully',
+
+//       data: {
+//         selectedContacts: contactIds.length,
+//         updatedContacts: result.modifiedCount,
+
+//         eventDate: event.toISOString(),
+//         reminderAt: reminderAt.toISOString(),
+//         deviceId: String(deviceId),
+
+//         contacts: contacts,
+//       },
+//     });
+
+//   } catch (error) {
+//     console.error(
+//       '[BULK REMINDER] Error:',
+//       error.message
+//     );
+
+//     return res.status(500).json({
+//       success: false,
+//       message:
+//         error.message ||
+//         'Failed to schedule reminder',
+//     });
+//   }
+// };
+
+// ============================================
+// BULK 1-DAY-BEFORE WHATSAPP REMINDER
+// ============================================
+
 exports.scheduleBulkOneDayReminder = async (req, res) => {
   try {
     const {
@@ -1527,35 +1687,38 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
       deviceId,
     } = req.body;
 
-    // Validation
+    // ==========================================
+    // VALIDATION
+    // ==========================================
+
     if (
       !Array.isArray(contactIds) ||
       contactIds.length === 0
     ) {
       return res.status(400).json({
         success: false,
-        message: 'Please select at least one contact',
+        message: "Please select at least one contact",
       });
     }
 
     if (!eventDate) {
       return res.status(400).json({
         success: false,
-        message: 'Event date is required',
+        message: "Event date is required",
       });
     }
 
     if (!message || !message.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Reminder message is required',
+        message: "Reminder message is required",
       });
     }
 
     if (!deviceId) {
       return res.status(400).json({
         success: false,
-        message: 'WhatsApp device is required',
+        message: "WhatsApp device is required",
       });
     }
 
@@ -1568,21 +1731,21 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
     if (Number.isNaN(event.getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid event date',
+        message: "Invalid event date",
       });
     }
 
-    // Event must be in future
+    // Event future me hona chahiye
     if (event <= new Date()) {
       return res.status(400).json({
         success: false,
-        message: 'Event date must be in the future',
+        message: "Event date must be in the future",
       });
     }
 
     // ==========================================
     // CALCULATE REMINDER TIME
-    // EXACTLY 24 HOURS BEFORE
+    // EXACTLY 24 HOURS BEFORE EVENT
     // ==========================================
 
     const reminderAt = new Date(
@@ -1590,23 +1753,30 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
     );
 
     // ==========================================
-    // UPDATE CONTACTS
+    // UPDATE ALL SELECTED CONTACTS
     // ==========================================
 
     const result = await Contact.updateMany(
       {
-        _id: { $in: contactIds },
+        _id: {
+          $in: contactIds,
+        },
         status: {
-          $nin: ['Blocked', 'Unsubscribed'],
+          $nin: ["Blocked", "Unsubscribed"],
         },
       },
       {
         $set: {
+          // Event Date
           date: event,
           meetingCallDate: event,
-          reminderAt,
+
+          // Reminder
+          reminderAt: reminderAt,
           reminderSentAt: null,
           reminderMessage: message.trim(),
+
+          // WhatsApp Device
           reminderDeviceId: String(deviceId),
         },
       }
@@ -1617,26 +1787,55 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
     // ==========================================
 
     const updatedContacts = await Contact.find({
-      _id: { $in: contactIds },
+      _id: {
+        $in: contactIds,
+      },
       status: {
-        $nin: ['Blocked', 'Unsubscribed'],
+        $nin: ["Blocked", "Unsubscribed"],
       },
     }).select(
-      '_id name phone reminderMessage reminderAt reminderDeviceId meetingCallDate'
+      `
+      _id
+      name
+      phone
+      date
+      meetingCallDate
+      reminderAt
+      reminderSentAt
+      reminderMessage
+      reminderDeviceId
+      `
     );
 
     // ==========================================
-    // CREATE INDIVIDUAL RESPONSE DATA
+    // RESPONSE CONTACT DATA
     // ==========================================
 
     const contacts = updatedContacts.map((contact) => ({
       contactId: contact._id,
       contactName: contact.name,
       phone: contact.phone,
-      eventDate: event.toISOString(),
-      reminderAt: reminderAt.toISOString(),
-      deviceId: String(deviceId),
-      reminderMessage: message.trim(),
+
+      // Actual saved event date
+      eventDate: contact.date
+        ? contact.date.toISOString()
+        : null,
+
+      meetingCallDate: contact.meetingCallDate
+        ? contact.meetingCallDate.toISOString()
+        : null,
+
+      reminderAt: contact.reminderAt
+        ? contact.reminderAt.toISOString()
+        : null,
+
+      reminderSentAt: contact.reminderSentAt
+        ? contact.reminderSentAt.toISOString()
+        : null,
+
+      deviceId: contact.reminderDeviceId,
+
+      reminderMessage: contact.reminderMessage,
     }));
 
     // ==========================================
@@ -1645,23 +1844,28 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Reminder scheduled successfully',
+      message: "Reminder scheduled successfully",
 
       data: {
         selectedContacts: contactIds.length,
+
+        matchedContacts: result.matchedCount,
+
         updatedContacts: result.modifiedCount,
 
         eventDate: event.toISOString(),
+
         reminderAt: reminderAt.toISOString(),
+
         deviceId: String(deviceId),
 
-        contacts: contacts,
+        contacts,
       },
     });
 
   } catch (error) {
     console.error(
-      '[BULK REMINDER] Error:',
+      "[BULK REMINDER] Error:",
       error.message
     );
 
@@ -1669,12 +1873,10 @@ exports.scheduleBulkOneDayReminder = async (req, res) => {
       success: false,
       message:
         error.message ||
-        'Failed to schedule reminder',
+        "Failed to schedule reminder",
     });
   }
 };
-
-
 exports.getContactTags = async (req, res) => {
   try {
     const userId = req.user._id;
