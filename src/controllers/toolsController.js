@@ -132,5 +132,38 @@ exports.getCalendar = async (req, res) => {
     res.status(400).json({ success: false, message: e.message });
   }
 };
+exports.clearAllNotes = async (req, res) => {
+  try {
+    let deletedCount = 0;
 
+    // MongoDB mode
+    if (isMongoConnected()) {
+      const result = await Note.deleteMany({});
+
+      deletedCount = result.deletedCount || 0;
+    }
+
+    // Memory mode
+    else {
+      await init();
+
+      deletedCount = (store.notes || []).length;
+
+      store.notes = [];
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "All notes cleared successfully",
+      deletedCount,
+    });
+  } catch (e) {
+    console.error("[CLEAR ALL NOTES ERROR]", e);
+
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
+  }
+};
 module.exports = exports;

@@ -558,7 +558,12 @@ router.put(
   protect,
   h(tools.updateNote, 'notes.update')
 );
-
+// Clear all notes
+router.delete(
+  '/notes/clear-all',
+  protect,
+  h(tools.clearAllNotes, 'notes.clearAll')
+);
 // done
 router.delete(
   '/notes/:id',
