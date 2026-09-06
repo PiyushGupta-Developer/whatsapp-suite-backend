@@ -269,3 +269,45 @@ exports.deleteNotification = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+exports.clearAllNotifications = async (req, res) => {
+  try {
+    let deletedCount = 0;
+
+    // Memory mode
+    if (!isMongoConnected()) {
+      await init();
+
+      const beforeCount = (store.notifications || []).length;
+
+      store.notifications = (store.notifications || []).filter(
+        (notification) => String(notification.userId) !== String(req.user._id),
+      );
+
+      deletedCount = beforeCount - store.notifications.length;
+    }
+
+    // MongoDB mode
+    else {
+      const result = await Notification.deleteMany({
+        userId: req.user._id,
+      });
+
+      deletedCount = result.deletedCount || 0;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "All notifications cleared successfully",
+      deletedCount,
+    });
+  } catch (error) {
+    console.error("[CLEAR ALL NOTIFICATIONS ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};

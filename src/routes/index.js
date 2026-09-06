@@ -871,6 +871,12 @@ router.patch(
   protect,
   h(notifications.markAllAsRead, 'notifications.markAllAsRead')
 );
+
+router.delete(
+  "/notifications/clear-all",
+  protect,
+  h(notifications.clearAllNotifications, "notifications.clearAll"),
+);
 router.delete(
   '/notifications/:id',
   protect,
@@ -882,7 +888,6 @@ router.post(
   protect,
   h(notifications.createNotification, 'notifications.create')
 );
-
 
 
 module.exports = router;
