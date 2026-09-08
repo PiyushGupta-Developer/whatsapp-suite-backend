@@ -668,8 +668,7 @@ exports.sendMessage = async (req, res) => {
 // ─── Send bulk messages ───────────────────────────────────────
 exports.sendBulkMessages = async (req, res) => {
   try {
-    const messageService =
-      require('../services/messageService');
+    const messageService = require('../services/messageService');
 
     const {
       messages,
@@ -685,133 +684,56 @@ exports.sendBulkMessages = async (req, res) => {
 
     const userId = req.user._id;
 
-    // ==========================================================
-    // Parse arrays coming from multipart/form-data
-    // ==========================================================
+    // 1. Pick whichever array was sent
+    const rawList = Array.isArray(messages)
+      ? messages
+      : Array.isArray(recipients) && recipients.length
+        ? recipients
+        : contacts;
 
-    const parseArray = (value) => {
-      // Already an array
-      if (Array.isArray(value)) {
-        return value;
-      }
-
-      // JSON string from form-data
-      if (typeof value === 'string') {
-        try {
-          const parsed = JSON.parse(value);
-
-          return Array.isArray(parsed)
-            ? parsed
-            : [];
-        } catch (error) {
-          return [];
-        }
-      }
-
-      return [];
-    };
-
-    // Parse form-data values
-    const parsedMessages =
-      parseArray(messages);
-
-    const parsedContacts =
-      parseArray(contacts);
-
-    const parsedRecipients =
-      parseArray(recipients);
-
-    const parsedDeviceIds =
-      parseArray(deviceIds);
-
-    // ==========================================================
-    // 1. Pick whichever recipient array was sent
-    // ==========================================================
-
-    const rawList =
-      parsedMessages.length
-        ? parsedMessages
-        : parsedRecipients.length
-          ? parsedRecipients
-          : parsedContacts;
-
-    if (
-      !Array.isArray(rawList) ||
-      rawList.length === 0
-    ) {
+    if (!Array.isArray(rawList) || rawList.length === 0) {
       return res.status(400).json({
         success: false,
-        message:
-          'contacts/messages/recipients array required',
+        message: 'contacts/messages/recipients array required',
       });
     }
 
-    // ==========================================================
     // 2. Normalize each item
-    // ==========================================================
-
     const list = [];
     const invalid = [];
 
     rawList.forEach((item, index) => {
-      const to =
-        item.to ||
-        item.phone ||
-        item.number;
+      const to = item.to || item.phone || item.number;
 
       if (!to) {
         invalid.push({
           index,
-          reason:
-            'missing recipient (to/phone/number)',
+          reason: 'missing recipient (to/phone/number)',
         });
-
         return;
       }
 
-      // Individual message OR common message
       const finalMessage =
-        item.message ||
-        message ||
-        '';
+        item.message || message || '';
 
-      // Individual media OR common media
       const finalMedia =
         item.mediaFiles ||
         mediaFiles ||
         (media ? [media] : []);
 
-      // If neither text nor media exists
-      if (
-        !finalMessage &&
-        finalMedia.length === 0
-      ) {
+      if (!finalMessage && finalMedia.length === 0) {
         invalid.push({
           index,
-          reason:
-            'no message text or media provided',
+          reason: 'no message text or media provided',
         });
-
         return;
       }
 
       list.push({
         ...item,
-
-        // Keep phone for sendOne()
-        phone:
-          item.phone ||
-          item.to ||
-          item.number,
-
         to,
-
-        message:
-          finalMessage,
-
-        mediaFiles:
-          finalMedia,
-
+        message: finalMessage,
+        mediaFiles: finalMedia,
         sendText:
           item.sendText !== undefined
             ? item.sendText
@@ -819,95 +741,69 @@ exports.sendBulkMessages = async (req, res) => {
       });
     });
 
-    // ==========================================================
-    // Check valid recipients
-    // ==========================================================
-
     if (list.length === 0) {
       return res.status(400).json({
         success: false,
-        message:
-          'No valid recipients found',
+        message: 'No valid recipients found',
         invalid,
       });
     }
 
-    // ==========================================================
     // 3. Device selection
-    // ==========================================================
-
     const selectedDevices =
-      parsedDeviceIds.length
-        ? parsedDeviceIds
+      Array.isArray(deviceIds) && deviceIds.length
+        ? deviceIds
         : deviceId
           ? [deviceId]
           : [];
 
     /*
       IMPORTANT:
-
       Agar devices select kiye gaye hain,
       to verify karo ki sab logged-in user ke hain.
     */
 
     if (selectedDevices.length > 0) {
 
-      // ========================================================
       // MongoDB Mode
-      // ========================================================
-
       if (isMongoConnected()) {
 
-        const ownedDevices =
-          await Device.find({
-            _id: {
-              $in: selectedDevices,
-            },
-
-            owner: userId,
-          }).select('_id');
+        const ownedDevices = await Device.find({
+          _id: {
+            $in: selectedDevices,
+          },
+          owner: userId,
+        }).select('_id');
 
         const ownedDeviceIds =
           ownedDevices.map(
-            (device) =>
-              String(device._id)
+            (device) => String(device._id)
           );
 
         const unauthorizedDevices =
           selectedDevices.filter(
             (id) =>
-              !ownedDeviceIds.includes(
-                String(id)
-              )
+              !ownedDeviceIds.includes(String(id))
           );
 
-        if (
-          unauthorizedDevices.length > 0
-        ) {
+        if (unauthorizedDevices.length > 0) {
           return res.status(403).json({
             success: false,
-
             message:
               'You are not authorized to use one or more selected devices',
-
-            unauthorizedDevices,
           });
         }
 
       } else {
 
-        // ======================================================
         // Memory Mode
-        // ======================================================
-
         await init();
 
         const ownedDeviceIds =
           store.devices
             .filter(
               (device) =>
-                String(device.owner) ===
-                String(userId)
+                String(device.owner) === String(userId)
             )
             .map(
               (device) =>
@@ -917,115 +813,53 @@ exports.sendBulkMessages = async (req, res) => {
         const unauthorizedDevices =
           selectedDevices.filter(
             (id) =>
-              !ownedDeviceIds.includes(
-                String(id)
-              )
+              !ownedDeviceIds.includes(String(id))
           );
 
-        if (
-          unauthorizedDevices.length > 0
-        ) {
+        if (unauthorizedDevices.length > 0) {
           return res.status(403).json({
             success: false,
-
             message:
               'You are not authorized to use one or more selected devices',
-
-            unauthorizedDevices,
           });
         }
       }
     }
 
-    // ==========================================================
-    // Attach uploaded files from multer
-    // ==========================================================
-
-    if (
-      Array.isArray(req.files) &&
-      req.files.length > 0
-    ) {
-
-      const uploadedMedia =
-        req.files.map(
-          (file) => ({
-            path: file.path,
-            filename: file.filename,
-            mimetype: file.mimetype,
-            originalname:
-              file.originalname,
-          })
-        );
-
-      // Add same uploaded files to every recipient
-      list.forEach((item) => {
-        item.mediaFiles = [
-          ...item.mediaFiles,
-          ...uploadedMedia,
-        ];
-      });
-    }
-
-    // ==========================================================
-    // 4. Send bulk messages
-    // ==========================================================
-
+    // 4. Send
     const {
       deviceIds: activeDevices,
       results,
-    } =
-      await messageService.sendBulk(
-        list,
-        selectedDevices
-      );
-
-    // ==========================================================
-    // Result counts
-    // ==========================================================
+    } = await messageService.sendBulk(
+      list,
+      selectedDevices
+    );
 
     const sent =
-      results.filter(
-        (r) => r.ok
-      ).length;
+      results.filter((r) => r.ok).length;
 
     const failed =
       results.length - sent;
 
-    // ==========================================================
-    // Response
-    // ==========================================================
-
     return res.status(200).json({
       success: true,
-
       sent,
-
       failed,
-
-      total:
-        results.length,
-
-      skipped:
-        invalid.length,
-
+      total: results.length,
+      skipped: invalid.length,
       invalid,
-
       activeDevices,
 
-      distribution:
-        activeDevices.reduce(
-          (acc, id) => {
+      distribution: activeDevices.reduce(
+        (acc, id) => {
+          acc[id] = results.filter(
+            (r) => r.deviceId === id
+          ).length;
 
-            acc[id] =
-              results.filter(
-                (r) =>
-                  r.deviceId === id
-              ).length;
-
-            return acc;
-          },
-          {}
-        ),
+          return acc;
+        },
+        {}
+      ),
 
       results,
 
@@ -1042,7 +876,6 @@ exports.sendBulkMessages = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-
       message:
         error.message ||
         'Internal server error',
