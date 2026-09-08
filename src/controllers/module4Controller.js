@@ -8,92 +8,108 @@ const Media = require('../models/Media');
 
 async function ensureM4() {
   await init();
-  if (!store.variables) {
+
+  // Variables
+  if (!Array.isArray(store.variables)) {
     store.variables = [
-      { key: 'Name', label: 'Contact Name', example: 'John Doe', source: 'contact' },
-      { key: 'Phone', label: 'Phone Number', example: '+919876543210', source: 'contact' },
-      { key: 'Email', label: 'Email', example: 'john@mail.com', source: 'contact' },
-      { key: 'Company', label: 'Company', example: 'Acme Ltd', source: 'custom' },
-      { key: 'OrderId', label: 'Order ID', example: 'ORD-1001', source: 'custom' },
-      { key: 'Amount', label: 'Amount', example: '999', source: 'custom' },
-      { key: 'Date', label: 'Date', example: '28 Jul 2026', source: 'system' },
+      {
+        key: "Name",
+        label: "Contact Name",
+        example: "John Doe",
+        source: "contact",
+      },
+      {
+        key: "Phone",
+        label: "Phone Number",
+        example: "+919876543210",
+        source: "contact",
+      },
+      {
+        key: "Email",
+        label: "Email",
+        example: "john@mail.com",
+        source: "contact",
+      },
+      {
+        key: "Company",
+        label: "Company",
+        example: "Acme Ltd",
+        source: "custom",
+      },
+      {
+        key: "OrderId",
+        label: "Order ID",
+        example: "ORD-1001",
+        source: "custom",
+      },
+      {
+        key: "Amount",
+        label: "Amount",
+        example: "999",
+        source: "custom",
+      },
+      {
+        key: "Date",
+        label: "Date",
+        example: "28 Jul 2026",
+        source: "system",
+      },
     ];
   }
-  if (!store.queue) {
+
+  // Queue
+  if (!Array.isArray(store.queue)) {
     store.queue = [
       {
-        _id: 'q1',
-        campaignName: 'Festival Offer 2024',
-        phone: '+919876543210',
-        status: 'Sent',
+        _id: "q1",
+        campaignName: "Festival Offer 2024",
+        phone: "+919876543210",
+        status: "Sent",
         attempts: 1,
-        message: 'Hello John...',
+        message: "Hello John...",
         scheduledAt: new Date(Date.now() - 3600000).toISOString(),
         processedAt: new Date(Date.now() - 3500000).toISOString(),
         error: null,
       },
       {
-        _id: 'q2',
-        campaignName: 'New Product Launch',
-        phone: '+919876543211',
-        status: 'Pending',
+        _id: "q2",
+        campaignName: "New Product Launch",
+        phone: "+919876543211",
+        status: "Pending",
         attempts: 0,
-        message: 'Check out our new product...',
+        message: "Check out our new product...",
         scheduledAt: new Date(Date.now() + 600000).toISOString(),
         processedAt: null,
         error: null,
       },
       {
-        _id: 'q3',
-        campaignName: 'New Product Launch',
-        phone: '+919876543212',
-        status: 'Failed',
+        _id: "q3",
+        campaignName: "New Product Launch",
+        phone: "+919876543212",
+        status: "Failed",
         attempts: 3,
-        message: 'Limited offer...',
+        message: "Limited offer...",
         scheduledAt: new Date(Date.now() - 7200000).toISOString(),
         processedAt: new Date(Date.now() - 7000000).toISOString(),
-        error: 'Number not on WhatsApp',
+        error: "Number not on WhatsApp",
       },
       {
-        _id: 'q4',
-        campaignName: 'Summer Sale',
-        phone: '+919876543213',
-        status: 'Processing',
+        _id: "q4",
+        campaignName: "Summer Sale",
+        phone: "+919876543213",
+        status: "Processing",
         attempts: 1,
-        message: 'Summer deals...',
+        message: "Summer deals...",
         scheduledAt: new Date().toISOString(),
         processedAt: null,
         error: null,
       },
     ];
   }
-  if (!store.messageTemplates) {
-    store.messageTemplates = [
-      {
-        _id: 't1',
-        name: 'Welcome',
-        body: 'Hello {{Name}}, welcome to WhatsApp Suite!',
-        variables: ['Name'],
-        category: 'General',
-        isActive: true,
-      },
-      {
-        _id: 't2',
-        name: 'Order Update',
-        body: 'Hi {{Name}}, your order {{OrderId}} of ₹{{Amount}} is confirmed.',
-        variables: ['Name', 'OrderId', 'Amount'],
-        category: 'Transactional',
-        isActive: true,
-      },
-      {
-        _id: 't3',
-        name: 'Promo',
-        body: 'Dear {{Name}}, exclusive offer just for you. Valid till {{Date}}.',
-        variables: ['Name', 'Date'],
-        category: 'Marketing',
-        isActive: true,
-      },
-    ];
+
+  // Templates
+  if (!Array.isArray(store.messageTemplates)) {
+    store.messageTemplates = [];
   }
 }
 
@@ -154,63 +170,207 @@ exports.getTemplates = async (req, res) => {
 
 exports.createTemplate = async (req, res) => {
   try {
-    const { name, body, category, variables } = req.body;
-    if (!name || !body) return res.status(400).json({ success: false, message: 'name and body required' });
-    const foundVars = (body.match(/\{\{(\w+)\}\}/g) || []).map((m) => m.replace(/[{}]/g, ''));
-    if (isMongoConnected()) {
-      const t = await Template.create({
-        name,
-        body,
-        category: category || 'General',
-        variables: variables || foundVars,
-        createdBy: req.user._id,
+    const { name, category, status, body } = req.body;
+
+    if (!name || !body) {
+      return res.status(400).json({
+        success: false,
+        message: "Template name and message body are required",
       });
-      return res.status(201).json({ success: true, data: t });
     }
+
+    const allowedStatuses = ["Draft", "Active", "Inactive"];
+
+    const templateStatus = status || "Draft";
+
+    if (!allowedStatuses.includes(templateStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Status must be Draft, Active or Inactive",
+      });
+    }
+
+    // MongoDB
+    if (isMongoConnected()) {
+      const template = await Template.create({
+        name: name.trim(),
+        category: category?.trim() || "General",
+        status: templateStatus,
+        body: body.trim(),
+        createdBy: req.user?._id,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: "Template created successfully",
+        data: template,
+      });
+    }
+
+    // Memory Store
     await ensureM4();
-    const t = {
+
+    const template = {
       _id: `t${Date.now()}`,
-      name,
-      body,
-      category: category || 'General',
-      variables: variables || foundVars,
-      isActive: true,
+      name: name.trim(),
+      category: category?.trim() || "General",
+      status: templateStatus,
+      body: body.trim(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
-    store.messageTemplates.unshift(t);
-    res.status(201).json({ success: true, data: t });
+
+    store.messageTemplates.unshift(template);
+
+    return res.status(201).json({
+      success: true,
+      message: "Template created successfully",
+      data: template,
+    });
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    console.error("createTemplate error:", e);
+
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 };
-
 exports.updateTemplate = async (req, res) => {
   try {
-    if (isMongoConnected()) {
-      const t = await Template.findByIdAndUpdate(req.params.id, req.body, { new: true });
-      if (!t) return res.status(404).json({ success: false, message: 'Not found' });
-      return res.json({ success: true, data: t });
+    const { name, category, status, body } = req.body;
+
+    const allowedStatuses = ["Draft", "Active", "Inactive"];
+
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Status must be Draft, Active or Inactive",
+      });
     }
+
+    const updateData = {};
+
+    if (name !== undefined) {
+      updateData.name = name.trim();
+    }
+
+    if (category !== undefined) {
+      updateData.category = category.trim();
+    }
+
+    if (status !== undefined) {
+      updateData.status = status;
+    }
+
+    if (body !== undefined) {
+      updateData.body = body.trim();
+    }
+
+    // MongoDB
+    if (isMongoConnected()) {
+      const template = await Template.findByIdAndUpdate(
+        req.params.id,
+        updateData,
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!template) {
+        return res.status(404).json({
+          success: false,
+          message: "Template not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Template updated successfully",
+        data: template,
+      });
+    }
+
+    // Memory Store
     await ensureM4();
-    const t = store.messageTemplates.find((x) => x._id === req.params.id);
-    if (!t) return res.status(404).json({ success: false, message: 'Not found' });
-    Object.assign(t, req.body);
-    res.json({ success: true, data: t });
+
+    const template = store.messageTemplates.find(
+      (item) => item._id === req.params.id,
+    );
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        message: "Template not found",
+      });
+    }
+
+    Object.assign(template, updateData, {
+      updatedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      message: "Template updated successfully",
+      data: template,
+    });
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    console.error("updateTemplate error:", e);
+
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 };
 
 exports.deleteTemplate = async (req, res) => {
   try {
+    // MongoDB
     if (isMongoConnected()) {
-      await Template.findByIdAndDelete(req.params.id);
-      return res.json({ success: true, message: 'Deleted' });
+      const template = await Template.findByIdAndDelete(req.params.id);
+
+      if (!template) {
+        return res.status(404).json({
+          success: false,
+          message: "Template not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Template deleted successfully",
+      });
     }
+
+    // Memory Store
     await ensureM4();
-    store.messageTemplates = store.messageTemplates.filter((x) => x._id !== req.params.id);
-    res.json({ success: true, message: 'Deleted' });
+
+    const index = store.messageTemplates.findIndex(
+      (item) => item._id === req.params.id,
+    );
+
+    if (index === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Template not found",
+      });
+    }
+
+    store.messageTemplates.splice(index, 1);
+
+    return res.json({
+      success: true,
+      message: "Template deleted successfully",
+    });
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    console.error("deleteTemplate error:", e);
+
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 };
 

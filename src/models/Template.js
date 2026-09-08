@@ -2,15 +2,41 @@ const mongoose = require('mongoose');
 
 const templateSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    body: { type: String, required: true },
-    category: { type: String, default: 'General' },
-    media: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Media' }],
-    variables: [{ type: String }], // e.g. {{name}}, {{order_id}}
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    isActive: { type: Boolean, default: true },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    category: {
+      type: String,
+      default: 'General',
+      trim: true,
+    },
+
+    status: {
+      type: String,
+      enum: ['Draft', 'Active', 'Inactive'],
+      default: 'Draft',
+    },
+
+    body: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-module.exports = mongoose.model('Template', templateSchema);
+module.exports = mongoose.model(
+  'Template',
+  templateSchema
+);
