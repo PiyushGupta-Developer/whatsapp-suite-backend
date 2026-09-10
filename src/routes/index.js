@@ -398,7 +398,11 @@ router.get(
   h(contacts.searchContacts, 'contacts.search')
 );
 
-
+router.get(
+  "/contacts/:id/history",
+  protect,
+  h(contacts.getContactHistory, "contacts.history"),
+);
 
 router.get(
   '/contacts/tags',

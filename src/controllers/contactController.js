@@ -4,6 +4,7 @@ const XLSX = require('xlsx');
 const Contact = require('../models/Contact');
 const ContactList = require('../models/ContactList');
 const Note = require('../models/Note');
+const ContactHistory = require("../models/ContactHistory");
 const { store, init, isMongoConnected } = require('../utils/memoryStore');
 
 const excelUpload = multer({
@@ -285,18 +286,227 @@ exports.updateContact = async (req, res) => {
     // User kisi aur user ko owner nahi bana sakta
     delete req.body.createdBy;
 
+    // ============================================================
+    // MONGODB MODE
+    // ============================================================
+
     if (isMongoConnected()) {
-      const contact = await Contact.findOneAndUpdate(
-        {
-          _id: req.params.id,
-          createdBy: userId,
-        },
-        req.body,
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
+      // ----------------------------------------------------------
+      // 1. CURRENT CONTACT FIND
+      // ----------------------------------------------------------
+
+      const contact = await Contact.findOne({
+        _id: req.params.id,
+        createdBy: userId,
+      });
+
+      if (!contact) {
+        return res.status(404).json({
+          success: false,
+          message: "Contact not found",
+        });
+      }
+
+      // ----------------------------------------------------------
+      // 2. LAST HISTORY VERSION FIND
+      // ----------------------------------------------------------
+
+      const lastHistory = await ContactHistory.findOne({
+        contactId: contact._id,
+        createdBy: userId,
+      }).sort({
+        version: -1,
+      });
+
+      const nextVersion = lastHistory ? lastHistory.version + 1 : 1;
+
+      // ----------------------------------------------------------
+      // 3. SAVE OLD CONTACT DATA IN HISTORY
+      // ----------------------------------------------------------
+
+      await ContactHistory.create({
+        contactId: contact._id,
+        createdBy: userId,
+
+        version: nextVersion,
+
+        architectName: contact.architectName || "",
+        firmName: contact.firmName || "",
+        area: contact.area || "",
+        address: contact.address || "",
+        location: contact.location || "",
+
+        meetingCallDate: contact.meetingCallDate || null,
+
+        req: contact.req || "",
+        requirement: contact.requirement || "",
+
+        phone: contact.phone || "",
+        email: contact.email || "",
+
+        remark: contact.remark || "",
+
+        status: contact.status || "Active",
+
+        tags: contact.tags || [],
+        lists: contact.lists || [],
+
+        changedAt: new Date(),
+      });
+
+      // ----------------------------------------------------------
+      // 4. UPDATE CURRENT CONTACT
+      // ----------------------------------------------------------
+
+      Object.assign(contact, req.body);
+
+      // updatedAt update
+      contact.updatedAt = new Date();
+
+      await contact.save();
+
+      // ----------------------------------------------------------
+      // 5. RETURN UPDATED CONTACT
+      // ----------------------------------------------------------
+
+      return res.json({
+        success: true,
+        data: contact,
+        message: "Contact updated successfully",
+        historyVersion: nextVersion,
+      });
+    }
+
+    // ============================================================
+    // MEMORY MODE
+    // ============================================================
+
+    await init();
+
+    // ----------------------------------------------------------
+    // 6. FIND CURRENT CONTACT
+    // ----------------------------------------------------------
+
+    const contact = store.contacts.find(
+      (c) =>
+        String(c._id) === String(req.params.id) &&
+        String(c.createdBy) === String(userId),
+    );
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
+    }
+
+    // ----------------------------------------------------------
+    // 7. INITIALIZE CONTACT HISTORY
+    // ----------------------------------------------------------
+
+    store.contactHistory = store.contactHistory || [];
+
+    // ----------------------------------------------------------
+    // 8. FIND LAST HISTORY VERSION
+    // ----------------------------------------------------------
+
+    const previousVersions = store.contactHistory.filter(
+      (history) =>
+        String(history.contactId) === String(req.params.id) &&
+        String(history.createdBy) === String(userId),
+    );
+
+    const nextVersion =
+      previousVersions.length > 0
+        ? Math.max(...previousVersions.map((history) => history.version)) + 1
+        : 1;
+
+    // ----------------------------------------------------------
+    // 9. SAVE OLD CONTACT DATA IN HISTORY
+    // ----------------------------------------------------------
+
+    store.contactHistory.unshift({
+      _id: `ch${Date.now()}${Math.random()}`,
+
+      contactId: contact._id,
+      createdBy: userId,
+
+      version: nextVersion,
+
+      architectName: contact.architectName || "",
+      firmName: contact.firmName || "",
+      area: contact.area || "",
+      address: contact.address || "",
+      location: contact.location || "",
+
+      meetingCallDate: contact.meetingCallDate || null,
+
+      req: contact.req || "",
+      requirement: contact.requirement || "",
+
+      phone: contact.phone || "",
+      email: contact.email || "",
+
+      remark: contact.remark || "",
+
+      status: contact.status || "Active",
+
+      tags: contact.tags || [],
+      lists: contact.lists || [],
+
+      changedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+
+    // ----------------------------------------------------------
+    // 10. UPDATE CURRENT CONTACT
+    // ----------------------------------------------------------
+
+    Object.assign(contact, req.body, {
+      updatedAt: new Date().toISOString(),
+    });
+
+    // ----------------------------------------------------------
+    // 11. RETURN UPDATED CONTACT
+    // ----------------------------------------------------------
+
+    return res.json({
+      success: true,
+      data: contact,
+      message: "Contact updated successfully",
+      historyVersion: nextVersion,
+    });
+  } catch (error) {
+    console.error("[UPDATE CONTACT ERROR]", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+// ============================================================
+// GET CONTACT HISTORY
+// ============================================================
+
+exports.getContactHistory = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const contactId = req.params.id;
+
+    // ==========================================================
+    // MONGODB MODE
+    // ==========================================================
+
+    if (isMongoConnected()) {
+
+      // Check contact belongs to logged-in user
+      const contact = await Contact.findOne({
+        _id: contactId,
+        createdBy: userId,
+      });
 
       if (!contact) {
         return res.status(404).json({
@@ -305,19 +515,33 @@ exports.updateContact = async (req, res) => {
         });
       }
 
+      // Get old versions
+      const history = await ContactHistory.find({
+        contactId: contactId,
+        createdBy: userId,
+      }).sort({
+        version: -1,
+      });
+
       return res.json({
         success: true,
-        data: contact,
-        message: 'Contact updated',
+        contactId: contactId,
+        count: history.length,
+        data: history,
       });
     }
 
+    // ==========================================================
     // MEMORY MODE
+    // ==========================================================
+
     await init();
+
+    store.contactHistory = store.contactHistory || [];
 
     const contact = store.contacts.find(
       (c) =>
-        String(c._id) === String(req.params.id) &&
+        String(c._id) === String(contactId) &&
         String(c.createdBy) === String(userId)
     );
 
@@ -328,23 +552,39 @@ exports.updateContact = async (req, res) => {
       });
     }
 
-    Object.assign(contact, req.body, {
-      updatedAt: new Date().toISOString(),
-    });
+    const history = store.contactHistory
+      .filter(
+        (historyItem) =>
+          String(historyItem.contactId) ===
+            String(contactId) &&
+          String(historyItem.createdBy) ===
+            String(userId)
+      )
+      .sort(
+        (a, b) => b.version - a.version
+      );
 
     return res.json({
       success: true,
-      data: contact,
-      message: 'Contact updated',
+      contactId: contactId,
+      count: history.length,
+      data: history,
     });
 
   } catch (error) {
-    res.status(400).json({
+
+    console.error(
+      '[GET CONTACT HISTORY ERROR]',
+      error
+    );
+
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
+
 exports.bulkCreateContacts = async (req, res) => {
   try {
     const { contacts } = req.body;
