@@ -403,6 +403,11 @@ router.get(
   protect,
   h(contacts.getContactHistory, "contacts.history"),
 );
+router.get(
+  "/contact-history",
+  protect,
+  h(contacts.getOverallContactHistory, "contacts.history.all"),
+);
 
 router.get(
   '/contacts/tags',

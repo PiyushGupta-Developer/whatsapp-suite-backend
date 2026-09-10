@@ -585,6 +585,75 @@ exports.getContactHistory = async (req, res) => {
   }
 };
 
+
+
+// ============================================================
+// GET OVERALL CONTACT HISTORY
+// ============================================================
+
+exports.getOverallContactHistory = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // ==========================================================
+    // MONGODB MODE
+    // ==========================================================
+
+    if (isMongoConnected()) {
+
+      const history = await ContactHistory.find({
+        createdBy: userId,
+      })
+        .sort({
+          changedAt: -1,
+        })
+        .lean();
+
+      return res.json({
+        success: true,
+        count: history.length,
+        data: history,
+      });
+    }
+
+    // ==========================================================
+    // MEMORY MODE
+    // ==========================================================
+
+    await init();
+
+    const history = (store.contactHistory || [])
+      .filter(
+        (historyItem) =>
+          String(historyItem.createdBy) ===
+          String(userId)
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.changedAt) -
+          new Date(a.changedAt)
+      );
+
+    return res.json({
+      success: true,
+      count: history.length,
+      data: history,
+    });
+
+  } catch (error) {
+
+    console.error(
+      '[GET OVERALL CONTACT HISTORY ERROR]',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.bulkCreateContacts = async (req, res) => {
   try {
     const { contacts } = req.body;
