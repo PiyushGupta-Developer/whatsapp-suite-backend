@@ -1009,93 +1009,213 @@ exports.searchContacts = async (req, res) => {
 exports.deleteContact = async (req, res) => {
   try {
     const userId = req.user._id;
+    const contactId = req.params.id;
+
+    // ============================================================
+    // MONGODB MODE
+    // ============================================================
 
     if (isMongoConnected()) {
+      // ----------------------------------------------------------
+      // 1. DELETE CONTACT
+      // ----------------------------------------------------------
+
       const deleted = await Contact.findOneAndDelete({
-        _id: req.params.id,
+        _id: contactId,
         createdBy: userId,
       });
 
       if (!deleted) {
         return res.status(404).json({
           success: false,
-          message: 'Contact not found',
+          message: "Contact not found",
         });
       }
 
+      // ----------------------------------------------------------
+      // 2. DELETE CONTACT HISTORY
+      // ----------------------------------------------------------
+
+      const historyDeleted = await ContactHistory.deleteMany({
+        contactId: deleted._id,
+        createdBy: userId,
+      });
+
       return res.json({
         success: true,
-        message: 'Contact deleted',
+        message: "Contact and its history deleted successfully",
+        deletedHistoryCount: historyDeleted.deletedCount,
       });
     }
 
+    // ============================================================
+    // MEMORY MODE
+    // ============================================================
+
     await init();
+
+    // ----------------------------------------------------------
+    // 3. FIND CONTACT
+    // ----------------------------------------------------------
 
     const idx = store.contacts.findIndex(
       (c) =>
-        String(c._id) === String(req.params.id) &&
-        String(c.createdBy) === String(userId)
+        String(c._id) === String(contactId) &&
+        String(c.createdBy) === String(userId),
     );
 
     if (idx < 0) {
       return res.status(404).json({
         success: false,
-        message: 'Contact not found',
+        message: "Contact not found",
       });
     }
 
+    // ----------------------------------------------------------
+    // 4. DELETE CONTACT
+    // ----------------------------------------------------------
+
+    const deletedContact = store.contacts[idx];
+
     store.contacts.splice(idx, 1);
+
+    // ----------------------------------------------------------
+    // 5. DELETE CONTACT HISTORY
+    // ----------------------------------------------------------
+
+    store.contactHistory = store.contactHistory || [];
+
+    const oldHistoryCount = store.contactHistory.length;
+
+    store.contactHistory = store.contactHistory.filter(
+      (historyItem) =>
+        !(
+          String(historyItem.contactId) === String(deletedContact._id) &&
+          String(historyItem.createdBy) === String(userId)
+        ),
+    );
+
+    const deletedHistoryCount = oldHistoryCount - store.contactHistory.length;
+
+    // ----------------------------------------------------------
+    // 6. RESPONSE
+    // ----------------------------------------------------------
 
     return res.json({
       success: true,
-      message: 'Contact deleted',
+      message: "Contact and its history deleted successfully",
+      deletedHistoryCount,
     });
-
   } catch (error) {
-    res.status(500).json({
+    console.error("[DELETE CONTACT ERROR]", error);
+
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-// 001 code delete 
+// 001 code delete
 exports.deleteAllContacts = async (req, res) => {
   try {
     const userId = req.user._id;
 
+    // ============================================================
+    // MONGODB MODE
+    // ============================================================
+
     if (isMongoConnected()) {
+
+      // ----------------------------------------------------------
+      // 1. DELETE ALL CONTACTS
+      // ----------------------------------------------------------
+
       const result = await Contact.deleteMany({
         createdBy: userId,
       });
 
+      // ----------------------------------------------------------
+      // 2. DELETE ALL CONTACT HISTORY
+      // ----------------------------------------------------------
+
+      const historyResult =
+        await ContactHistory.deleteMany({
+          createdBy: userId,
+        });
+
       return res.status(200).json({
         success: true,
-        message: 'All your contacts deleted successfully',
+        message:
+          'All your contacts and their history deleted successfully',
         deletedCount: result.deletedCount,
+        deletedHistoryCount:
+          historyResult.deletedCount,
       });
     }
 
+    // ============================================================
     // MEMORY MODE
+    // ============================================================
+
     await init();
 
-    const beforeCount = store.contacts.length;
+    // ----------------------------------------------------------
+    // 3. DELETE ALL CONTACTS
+    // ----------------------------------------------------------
+
+    const beforeCount =
+      store.contacts.length;
 
     store.contacts = store.contacts.filter(
-      (c) => String(c.createdBy) !== String(userId)
+      (c) =>
+        String(c.createdBy) !==
+        String(userId)
     );
 
     const deletedCount =
-      beforeCount - store.contacts.length;
+      beforeCount -
+      store.contacts.length;
+
+    // ----------------------------------------------------------
+    // 4. DELETE ALL CONTACT HISTORY
+    // ----------------------------------------------------------
+
+    store.contactHistory =
+      store.contactHistory || [];
+
+    const beforeHistoryCount =
+      store.contactHistory.length;
+
+    store.contactHistory =
+      store.contactHistory.filter(
+        (historyItem) =>
+          String(historyItem.createdBy) !==
+          String(userId)
+      );
+
+    const deletedHistoryCount =
+      beforeHistoryCount -
+      store.contactHistory.length;
+
+    // ----------------------------------------------------------
+    // 5. RESPONSE
+    // ----------------------------------------------------------
 
     return res.status(200).json({
       success: true,
-      message: 'All your contacts deleted successfully',
+      message:
+        'All your contacts and their history deleted successfully',
       deletedCount,
+      deletedHistoryCount,
     });
 
   } catch (error) {
-    console.error('[DELETE ALL CONTACTS ERROR]', error);
+
+    console.error(
+      '[DELETE ALL CONTACTS ERROR]',
+      error
+    );
 
     return res.status(500).json({
       success: false,
