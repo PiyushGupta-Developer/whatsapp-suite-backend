@@ -155,21 +155,51 @@ exports.deleteVariable = async (req, res) => {
 };
 
 // ─── Templates (message with variables) ───────────────────────
+// ─── Templates (message with variables) ───────────────────────
+
 exports.getTemplates = async (req, res) => {
   try {
+    const userId = req.user._id;
+
+    // MongoDB
     if (isMongoConnected()) {
-      const list = await Template.find().sort({ createdAt: -1 });
-      return res.json({ success: true, data: list });
+      const list = await Template.find({
+        createdBy: userId,
+      }).sort({ createdAt: -1 });
+
+      return res.json({
+        success: true,
+        data: list,
+      });
     }
+
+    // Memory Store
     await ensureM4();
-    res.json({ success: true, data: store.messageTemplates });
+
+    const list = store.messageTemplates.filter(
+      (template) =>
+        String(template.createdBy) === String(userId)
+    );
+
+    return res.json({
+      success: true,
+      data: list,
+    });
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    console.error("getTemplates error:", e);
+
+    return res.status(500).json({
+      success: false,
+      message: e.message,
+    });
   }
 };
 
+
 exports.createTemplate = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     const { name, category, status, body } = req.body;
 
     if (!name || !body) {
@@ -197,7 +227,7 @@ exports.createTemplate = async (req, res) => {
         category: category?.trim() || "General",
         status: templateStatus,
         body: body.trim(),
-        createdBy: req.user?._id,
+        createdBy: userId,
       });
 
       return res.status(201).json({
@@ -216,6 +246,7 @@ exports.createTemplate = async (req, res) => {
       category: category?.trim() || "General",
       status: templateStatus,
       body: body.trim(),
+      createdBy: userId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -236,8 +267,12 @@ exports.createTemplate = async (req, res) => {
     });
   }
 };
+
+
 exports.updateTemplate = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     const { name, category, status, body } = req.body;
 
     const allowedStatuses = ["Draft", "Active", "Inactive"];
@@ -269,13 +304,16 @@ exports.updateTemplate = async (req, res) => {
 
     // MongoDB
     if (isMongoConnected()) {
-      const template = await Template.findByIdAndUpdate(
-        req.params.id,
+      const template = await Template.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          createdBy: userId,
+        },
         updateData,
         {
           new: true,
           runValidators: true,
-        },
+        }
       );
 
       if (!template) {
@@ -296,7 +334,9 @@ exports.updateTemplate = async (req, res) => {
     await ensureM4();
 
     const template = store.messageTemplates.find(
-      (item) => item._id === req.params.id,
+      (item) =>
+        item._id === req.params.id &&
+        String(item.createdBy) === String(userId)
     );
 
     if (!template) {
@@ -325,11 +365,17 @@ exports.updateTemplate = async (req, res) => {
   }
 };
 
+
 exports.deleteTemplate = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     // MongoDB
     if (isMongoConnected()) {
-      const template = await Template.findByIdAndDelete(req.params.id);
+      const template = await Template.findOneAndDelete({
+        _id: req.params.id,
+        createdBy: userId,
+      });
 
       if (!template) {
         return res.status(404).json({
@@ -348,7 +394,9 @@ exports.deleteTemplate = async (req, res) => {
     await ensureM4();
 
     const index = store.messageTemplates.findIndex(
-      (item) => item._id === req.params.id,
+      (item) =>
+        item._id === req.params.id &&
+        String(item.createdBy) === String(userId)
     );
 
     if (index === -1) {
