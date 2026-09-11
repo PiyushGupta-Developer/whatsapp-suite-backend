@@ -261,21 +261,111 @@ exports.getContact = async (req, res) => {
 
 exports.createContact = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     const payload = {
-  ...req.body,
-  createdBy: req.user._id,
-};
-    if (!payload.phone) return res.status(400).json({ success: false, message: 'phone is required' });
-    if (isMongoConnected()) {
-      const contact = await Contact.create(payload);
-      return res.status(201).json({ success: true, data: contact });
+      ...req.body,
+      createdBy: userId,
+    };
+
+    // Phone required
+    if (!payload.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "phone is required",
+      });
     }
+
+    // Phone normalize
+    payload.phone = String(payload.phone).replace(/\D/g, "");
+
+    // Empty phone after normalization
+    if (!payload.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid phone number is required",
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | MongoDB
+    |--------------------------------------------------------------------------
+    */
+    if (isMongoConnected()) {
+      // Check duplicate for the same user
+      const existingContact = await Contact.findOne({
+        phone: payload.phone,
+        createdBy: userId,
+      });
+
+      if (existingContact) {
+        return res.status(409).json({
+          success: false,
+          duplicate: true,
+          message: "This phone number already exists",
+          data: {
+            _id: existingContact._id,
+            name: existingContact.name,
+            phone: existingContact.phone,
+          },
+        });
+      }
+
+      const contact = await Contact.create(payload);
+
+      return res.status(201).json({
+        success: true,
+        data: contact,
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Memory Store
+    |--------------------------------------------------------------------------
+    */
     await init();
-    const contact = { _id: `ct${Date.now()}`, createdAt: new Date().toISOString(), ...payload };
+
+    // Check duplicate for the same user
+    const existingContact = store.contacts.find(
+      (contact) =>
+        String(contact.phone) === String(payload.phone) &&
+        String(contact.createdBy) === String(userId),
+    );
+
+    if (existingContact) {
+      return res.status(409).json({
+        success: false,
+        duplicate: true,
+        message: "This phone number already exists",
+        data: {
+          _id: existingContact._id,
+          name: existingContact.name,
+          phone: existingContact.phone,
+        },
+      });
+    }
+
+    const contact = {
+      _id: `ct${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      ...payload,
+    };
+
     store.contacts.push(contact);
-    res.status(201).json({ success: true, data: contact });
+
+    return res.status(201).json({
+      success: true,
+      data: contact,
+    });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    console.error("createContact error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -662,45 +752,156 @@ exports.bulkCreateContacts = async (req, res) => {
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Contacts array required',
+        message: "Contacts array required",
       });
     }
 
-    const docs = contacts.map((c) => ({
-      ...c,
-      createdBy: userId,
-    }));
+    /*
+    |--------------------------------------------------------------------------
+    | Prepare & Normalize Contacts
+    |--------------------------------------------------------------------------
+    */
+
+    const docs = [];
+    const duplicates = [];
+    const seenPhones = new Set();
+
+    contacts.forEach((contact, index) => {
+      const phone = String(contact.phone || "").replace(/\D/g, "");
+
+      // Phone missing
+      if (!phone) {
+        return;
+      }
+
+      // Duplicate inside current request
+      if (seenPhones.has(phone)) {
+        duplicates.push({
+          phone,
+          index: index + 1,
+          reason: "Duplicate phone number in request",
+        });
+
+        return;
+      }
+
+      seenPhones.add(phone);
+
+      docs.push({
+        ...contact,
+        phone,
+        createdBy: userId,
+      });
+    });
+
+    if (docs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid contacts found",
+        duplicateCount: duplicates.length,
+        duplicates,
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | MongoDB
+    |--------------------------------------------------------------------------
+    */
 
     if (isMongoConnected()) {
-      const result = await Contact.insertMany(docs, {
-        ordered: false,
-      });
+      const created = [];
 
-      return res.status(201).json({
-        success: true,
-        count: result.length,
-        data: result,
-      });
+      for (const doc of docs) {
+        // Check if phone already exists for this user
+        const existingContact = await Contact.findOne({
+          phone: doc.phone,
+          createdBy: userId,
+        });
+
+        if (existingContact) {
+          duplicates.push({
+            phone: doc.phone,
+            name: doc.name || "",
+            reason: "Phone number already exists",
+            existingContactId: existingContact._id,
+          });
+
+          continue;
+        }
+
+        const contact = await Contact.create(doc);
+
+        created.push(contact);
+      }
+
+      return res
+        .status(duplicates.length > 0 && created.length === 0 ? 409 : 201)
+        .json({
+          success: created.length > 0,
+          count: created.length,
+          createdCount: created.length,
+          duplicateCount: duplicates.length,
+          duplicates,
+          data: created,
+        });
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Memory Store
+    |--------------------------------------------------------------------------
+    */
 
     await init();
 
-    const created = docs.map((c, i) => ({
-      _id: `ct${Date.now()}${i}`,
-      createdAt: new Date().toISOString(),
-      ...c,
-    }));
+    const created = [];
 
-    store.contacts.push(...created);
+    for (let i = 0; i < docs.length; i++) {
+      const doc = docs[i];
 
-    return res.status(201).json({
-      success: true,
-      count: created.length,
-      data: created,
-    });
+      // Check existing contact for same user
+      const existingContact = store.contacts.find(
+        (contact) =>
+          String(contact.phone) === String(doc.phone) &&
+          String(contact.createdBy) === String(userId),
+      );
 
+      if (existingContact) {
+        duplicates.push({
+          phone: doc.phone,
+          name: doc.name || "",
+          reason: "Phone number already exists",
+          existingContactId: existingContact._id,
+        });
+
+        continue;
+      }
+
+      const contact = {
+        _id: `ct${Date.now()}${i}`,
+        createdAt: new Date().toISOString(),
+        ...doc,
+      };
+
+      store.contacts.push(contact);
+      created.push(contact);
+    }
+
+    return res
+      .status(duplicates.length > 0 && created.length === 0 ? 409 : 201)
+      .json({
+        success: created.length > 0,
+        count: created.length,
+        createdCount: created.length,
+        duplicateCount: duplicates.length,
+        duplicates,
+        data: created,
+      });
   } catch (error) {
-    res.status(400).json({
+    console.error("bulkCreateContacts error:", error);
+
+    return res.status(400).json({
       success: false,
       message: error.message,
     });
@@ -718,136 +919,294 @@ function findColumn(row, aliases) {
 
 exports.importExcel = async (req, res) => {
   try {
+    /*
+    |--------------------------------------------------------------------------
+    | 1. FILE VALIDATION
+    |--------------------------------------------------------------------------
+    */
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Excel file is required (field: file)',
+        message: "Excel file is required (field: file)",
       });
     }
+
     const workbook = XLSX.read(req.file.buffer, {
-      type: 'buffer',
+      type: "buffer",
       cellDates: true,
     });
 
     const sheetName = workbook.SheetNames[0];
+
     if (!sheetName) {
-      return res.status(400).json({ success: false, message: 'Excel sheet not found' });
+      return res.status(400).json({
+        success: false,
+        message: "Excel sheet not found",
+      });
     }
 
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
+
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      defval: "",
+      raw: true,
+    });
 
     if (!rows.length) {
-      return res.status(400).json({ success: false, message: 'Excel file contains no data rows' });
+      return res.status(400).json({
+        success: false,
+        message: "Excel file contains no data rows",
+      });
     }
 
-    console.log('========================================');
-    console.log('[Excel] Headers found:', Object.keys(rows[0]));
-    console.log('[Excel] First row:', rows[0]);
-    console.log('========================================');
+    console.log("========================================");
+    console.log("[Excel] Headers found:", Object.keys(rows[0]));
+    console.log("[Excel] First row:", rows[0]);
+    console.log("========================================");
 
-    const clean = (value) => (value === undefined || value === null ? '' : String(value).trim());
+    /*
+    |--------------------------------------------------------------------------
+    | 2. HELPER FUNCTIONS
+    |--------------------------------------------------------------------------
+    */
+
+    const clean = (value) => {
+      return value === undefined || value === null ? "" : String(value).trim();
+    };
 
     const parseDate = (value) => {
-      if (value === undefined || value === null || value === '') return null;
+      if (value === undefined || value === null || value === "") {
+        return null;
+      }
 
       if (value instanceof Date) {
         return isNaN(value.getTime()) ? null : value;
       }
 
-      if (typeof value === 'number') {
+      if (typeof value === "number") {
         const parsed = XLSX.SSF.parse_date_code(value);
-        if (!parsed) return null;
-        return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.H || 0, parsed.M || 0, parsed.S || 0);
+
+        if (!parsed) {
+          return null;
+        }
+
+        return new Date(
+          parsed.y,
+          parsed.m - 1,
+          parsed.d,
+          parsed.H || 0,
+          parsed.M || 0,
+          parsed.S || 0,
+        );
       }
 
       const text = String(value).trim();
 
       // DD/MM/YYYY
       let m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
       if (m) {
-        const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
+        const day = Number(m[1]);
+        const month = Number(m[2]);
+        const year = Number(m[3]);
+
         const date = new Date(year, month - 1, day);
-        if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) return date;
+
+        if (
+          date.getFullYear() === year &&
+          date.getMonth() === month - 1 &&
+          date.getDate() === day
+        ) {
+          return date;
+        }
       }
 
       // DD-MM-YYYY
       m = text.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+
       if (m) {
-        const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
+        const day = Number(m[1]);
+        const month = Number(m[2]);
+        const year = Number(m[3]);
+
         const date = new Date(year, month - 1, day);
-        if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) return date;
+
+        if (
+          date.getFullYear() === year &&
+          date.getMonth() === month - 1 &&
+          date.getDate() === day
+        ) {
+          return date;
+        }
       }
 
       // YYYY-MM-DD
       m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
       if (m) {
-        const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+        const year = Number(m[1]);
+        const month = Number(m[2]);
+        const day = Number(m[3]);
+
         const date = new Date(year, month - 1, day);
-        if (!isNaN(date.getTime())) return date;
+
+        if (!isNaN(date.getTime())) {
+          return date;
+        }
       }
 
       const parsed = new Date(text);
+
       return isNaN(parsed.getTime()) ? null : parsed;
     };
 
     const extractDateFromRemark = (remark) => {
-      if (!remark) return null;
+      if (!remark) {
+        return null;
+      }
+
       const match = String(remark).match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+
       return match ? parseDate(`${match[1]}/${match[2]}/${match[3]}`) : null;
     };
 
     const getReminderDate = (date, meetingCallDate, remark) => {
-      const sourceDate = date || meetingCallDate || extractDateFromRemark(remark);
-      if (!sourceDate) return null;
+      const sourceDate =
+        date || meetingCallDate || extractDateFromRemark(remark);
+
+      if (!sourceDate) {
+        return null;
+      }
+
       const reminderDate = new Date(sourceDate);
+
       reminderDate.setDate(reminderDate.getDate() - 1);
+
       return reminderDate;
     };
 
-    // ============================================================
-    // 4. NORMALISE EXCEL ROWS (flexible header aliases)
-    // ============================================================
+    /*
+    |--------------------------------------------------------------------------
+    | 3. NORMALISE EXCEL ROWS
+    |--------------------------------------------------------------------------
+    */
+
     const contacts = [];
+
+    // Track duplicate numbers inside this Excel file
+    const seenPhones = new Set();
+
+    // Excel internal duplicates
+    const excelDuplicates = [];
 
     rows.forEach((row, index) => {
       try {
-        const name = clean(findColumn(row, ['name', 'contact name', 'customer name']));
-        const phoneRaw = findColumn(row, ['phone', 'phone number', 'mobile', 'mobile number', 'number']);
-        const phone = clean(phoneRaw).replace(/\D/g, '');
+        const name = clean(
+          findColumn(row, ["name", "contact name", "customer name"]),
+        );
 
-        const architectName = clean(findColumn(row, ['architect name', 'architect']));
-        const firmName = clean(findColumn(row, ['firm name', 'firm', 'company']));
-        const area = clean(findColumn(row, ['area']));
-        const address = clean(findColumn(row, ['address']));
-        const location = clean(findColumn(row, ['location']));
+        const phoneRaw = findColumn(row, [
+          "phone",
+          "phone number",
+          "mobile",
+          "mobile number",
+          "number",
+        ]);
 
-        const dateValue = findColumn(row, ['date']);
-        const meetingCallDateValue = findColumn(row, ['meeting/call date', 'meeting call date']);
+        // Normalize phone
+        const phone = clean(phoneRaw).replace(/\D/g, "");
 
-        const reqVal = clean(findColumn(row, ['req']));
-        const requirement = clean(findColumn(row, ['requirement', 'requirements']));
-        const email = clean(findColumn(row, ['email', 'email address']));
-        const remark = clean(findColumn(row, ['remark', 'remarks']));
+        const architectName = clean(
+          findColumn(row, ["architect name", "architect"]),
+        );
+
+        const firmName = clean(
+          findColumn(row, ["firm name", "firm", "company"]),
+        );
+
+        const area = clean(findColumn(row, ["area"]));
+
+        const address = clean(findColumn(row, ["address"]));
+
+        const location = clean(findColumn(row, ["location"]));
+
+        const dateValue = findColumn(row, ["date"]);
+
+        const meetingCallDateValue = findColumn(row, [
+          "meeting/call date",
+          "meeting call date",
+        ]);
+
+        const reqVal = clean(findColumn(row, ["req"]));
+
+        const requirement = clean(
+          findColumn(row, ["requirement", "requirements"]),
+        );
+
+        const email = clean(findColumn(row, ["email", "email address"]));
+
+        const remark = clean(findColumn(row, ["remark", "remarks"]));
 
         const date = parseDate(dateValue);
+
         const meetingCallDate = parseDate(meetingCallDateValue);
+
         const reminderAt = getReminderDate(date, meetingCallDate, remark);
 
         console.log(`[Excel] Row ${index + 2}`, {
-          name, phone,
+          name,
+          phone,
           excelDate: dateValue,
           excelMeetingCallDate: meetingCallDateValue,
-          date, meetingCallDate, reminderAt,
+          date,
+          meetingCallDate,
+          reminderAt,
         });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Missing Phone
+        |--------------------------------------------------------------------------
+        */
 
         if (!phone) {
           console.warn(`[Excel] Row ${index + 2}: phone missing, skipping`);
+
           return;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Duplicate Inside Same Excel
+        |--------------------------------------------------------------------------
+        */
+
+        if (seenPhones.has(phone)) {
+          console.warn(
+            `[Excel] Row ${index + 2}: duplicate phone ${phone}, skipping`,
+          );
+
+          excelDuplicates.push({
+            phone,
+            row: index + 2,
+            name,
+            reason: "Duplicate phone number inside Excel file",
+          });
+
+          return;
+        }
+
+        seenPhones.add(phone);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Add Contact
+        |--------------------------------------------------------------------------
+        */
+
         contacts.push({
-          name: name || architectName || '',
+          name: name || architectName || "",
           phone,
           architectName,
           firmName,
@@ -861,7 +1220,7 @@ exports.importExcel = async (req, res) => {
           email,
           remark,
           reminderAt,
-          status: 'Active',
+          status: "Active",
           lists: [],
           tags: [],
         });
@@ -870,131 +1229,253 @@ exports.importExcel = async (req, res) => {
       }
     });
 
-    // ============================================================
-    // 5. VALIDATION
-    // ============================================================
+    /*
+    |--------------------------------------------------------------------------
+    | 4. VALIDATION
+    |--------------------------------------------------------------------------
+    */
+
     if (!contacts.length) {
       return res.status(400).json({
         success: false,
-        message: 'No valid rows with phone number found.',
+        message: "No valid rows with phone number found.",
+        duplicateExcelCount: excelDuplicates.length,
+        duplicates: excelDuplicates,
       });
     }
 
-    // ============================================================
-    // 6. SAVE
-    // ============================================================
+    /*
+    |--------------------------------------------------------------------------
+    | 5. SAVE
+    |--------------------------------------------------------------------------
+    */
+
     const createdBy = req.user._id;
+
     const created = [];
+
+    const databaseDuplicates = [];
+
     let remindersCreated = 0;
+
+    /*
+    |--------------------------------------------------------------------------
+    | 6. MONGODB
+    |--------------------------------------------------------------------------
+    */
 
     if (isMongoConnected()) {
       for (const payload of contacts) {
-        const updateData = {
-          name: payload.name,
-          phone: payload.phone,
-          architectName: payload.architectName,
-          firmName: payload.firmName,
-          area: payload.area,
-          address: payload.address,
-          location: payload.location,
-          date: payload.date,
-          meetingCallDate: payload.meetingCallDate,
-          req: payload.req,
-          requirement: payload.requirement,
-          email: payload.email,
-          remark: payload.remark,
-          reminderAt: payload.reminderAt,
-          status: payload.status,
-          lists: payload.lists,
-          tags: payload.tags,
-          updatedAt: new Date(),
-        };
+        /*
+        |--------------------------------------------------------------------------
+        | Check Existing Contact
+        |--------------------------------------------------------------------------
+        */
 
-        const update = { $set: updateData };
-        if (createdBy) {
-          update.$setOnInsert = { createdBy, createdAt: new Date() };
+        const existingContact = await Contact.findOne({
+          phone: payload.phone,
+          createdBy: createdBy,
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Already Exists -> Skip
+        |--------------------------------------------------------------------------
+        */
+
+        if (existingContact) {
+          console.warn(`[Excel] Duplicate DB contact found: ${payload.phone}`);
+
+          databaseDuplicates.push({
+            phone: payload.phone,
+            name: payload.name || "",
+            reason: "Phone number already exists",
+            existingContactId: existingContact._id,
+          });
+
+          continue;
         }
 
-        const contact = await Contact.findOneAndUpdate(
-  {
-    phone: payload.phone,
-    createdBy: createdBy,
-  },
-  update,
-  {
-    new: true,
-    upsert: true,
-    setDefaultsOnInsert: true,
-  }
-);
+        /*
+        |--------------------------------------------------------------------------
+        | Create New Contact
+        |--------------------------------------------------------------------------
+        */
+
+        const contact = await Contact.create({
+          ...payload,
+          createdBy,
+        });
+
         created.push(contact);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create Reminder Only For New Contact
+        |--------------------------------------------------------------------------
+        */
 
         if (payload.reminderAt) {
           await Note.create({
             contact: contact._id,
             contactId: String(contact._id),
             title: `Follow-up reminder: ${contact.name || contact.phone}`,
-            content: payload.remark || 'Imported Excel reminder',
-            type: 'reminder',
+            content: payload.remark || "Imported Excel reminder",
+            type: "reminder",
             date: payload.reminderAt,
             completed: false,
             createdBy,
           });
+
           remindersCreated++;
         }
       }
     } else {
+      /*
+      |--------------------------------------------------------------------------
+      | 7. MEMORY STORE
+      |--------------------------------------------------------------------------
+      */
+
       await init();
 
       for (const payload of contacts) {
-        let contact = store.contacts.find(
-  (c) =>
-    c.phone === payload.phone &&
-    String(c.createdBy) === String(createdBy)
-);
+        /*
+        |--------------------------------------------------------------------------
+        | Check Existing Contact
+        |--------------------------------------------------------------------------
+        */
 
-        if (!contact) {
-          contact = {
-            _id: `ct${Date.now()}${Math.random()}`,
-            createdAt: new Date().toISOString(),
-            ...(createdBy ? { createdBy } : {}),
-          };
-          store.contacts.push(contact);
+        const existingContact = store.contacts.find(
+          (contact) =>
+            String(contact.phone) === String(payload.phone) &&
+            String(contact.createdBy) === String(createdBy),
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Already Exists -> Skip
+        |--------------------------------------------------------------------------
+        */
+
+        if (existingContact) {
+          console.warn(`[Excel] Duplicate DB contact found: ${payload.phone}`);
+
+          databaseDuplicates.push({
+            phone: payload.phone,
+            name: payload.name || "",
+            reason: "Phone number already exists",
+            existingContactId: existingContact._id,
+          });
+
+          continue;
         }
 
-        Object.assign(contact, payload, { updatedAt: new Date().toISOString() });
+        /*
+        |--------------------------------------------------------------------------
+        | Create New Contact
+        |--------------------------------------------------------------------------
+        */
+
+        const contact = {
+          _id: `ct${Date.now()}${Math.random()}`,
+          createdAt: new Date().toISOString(),
+          ...(createdBy ? { createdBy } : {}),
+          ...payload,
+        };
+
+        store.contacts.push(contact);
+
         created.push(contact);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create Reminder Only For New Contact
+        |--------------------------------------------------------------------------
+        */
 
         if (payload.reminderAt) {
           store.notes = store.notes || [];
+
           store.notes.unshift({
             _id: `n${Date.now()}${Math.random()}`,
             contactId: String(contact._id),
             title: `Follow-up reminder: ${contact.name || contact.phone}`,
-            content: payload.remark || 'Imported Excel reminder',
-            type: 'reminder',
+            content: payload.remark || "Imported Excel reminder",
+            type: "reminder",
             date: payload.reminderAt,
             completed: false,
             createdAt: new Date().toISOString(),
             ...(createdBy ? { createdBy } : {}),
           });
+
           remindersCreated++;
         }
       }
     }
 
-    // ============================================================
-    // 7. RESPONSE
-    // ============================================================
+    /*
+    |--------------------------------------------------------------------------
+    | 8. COMBINE DUPLICATES
+    |--------------------------------------------------------------------------
+    */
+
+    const duplicates = [...excelDuplicates, ...databaseDuplicates];
+
+    const duplicateCount = duplicates.length;
+
+    /*
+    |--------------------------------------------------------------------------
+    | 9. RESPONSE
+    |--------------------------------------------------------------------------
+    */
+
+    // If nothing was created and everything was duplicate
+    if (created.length === 0 && duplicateCount > 0) {
+      return res.status(409).json({
+        success: false,
+        duplicate: true,
+        message:
+          "All contacts already exist or are duplicate numbers in the Excel file.",
+        count: 0,
+        createdCount: 0,
+        duplicateCount,
+        duplicateExcelCount: excelDuplicates.length,
+        duplicateDatabaseCount: databaseDuplicates.length,
+        skippedCount: duplicateCount,
+        remindersCreated,
+        duplicates,
+        data: [],
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | 10. PARTIAL / SUCCESS RESPONSE
+    |--------------------------------------------------------------------------
+    */
+
     return res.status(201).json({
       success: true,
+      message:
+        duplicateCount > 0
+          ? "Excel imported successfully. Duplicate contacts were skipped."
+          : "Excel imported successfully.",
       count: created.length,
+      createdCount: created.length,
+      duplicateCount,
+      duplicateExcelCount: excelDuplicates.length,
+      duplicateDatabaseCount: databaseDuplicates.length,
+      skippedCount: duplicateCount,
       remindersCreated,
-      reminderRule: 'Reminder is created exactly 1 day before Date/Meeting Call Date. A date found in Remark is also accepted.',
+      reminderRule:
+        "Reminder is created exactly 1 day before Date/Meeting Call Date. A date found in Remark is also accepted.",
+      duplicates,
       data: created,
     });
   } catch (error) {
-    console.error('[Excel Import Error]', error);
+    console.error("[Excel Import Error]", error);
+
     return res.status(400).json({
       success: false,
       message: `Excel import failed: ${error.message}`,
