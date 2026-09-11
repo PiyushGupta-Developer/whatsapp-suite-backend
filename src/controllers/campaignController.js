@@ -486,11 +486,47 @@ exports.bulkContactSendMessage = async (req, res) => {
       contactIds,
       deviceId,
       deviceIds,
+
+      // Schedule fields
+      scheduledAt,
+      timezone = "Asia/Kolkata",
+      repeat = "No Repeat",
+      endDate,
+
+      // Send control
+      sendNow = false,
       sendText = true,
     } = req.body;
 
-    // Existing mediaFiles from JSON body
+    // ============================================================
+    // BOOLEAN PARSING
+    // ============================================================
+
+    const parseBoolean = (value, defaultValue = false) => {
+      if (value === undefined || value === null || value === "") {
+        return defaultValue;
+      }
+
+      if (typeof value === "boolean") {
+        return value;
+      }
+
+      return String(value).toLowerCase() === "true";
+    };
+
+    const shouldSendNow = parseBoolean(sendNow, false);
+    const shouldSendText = parseBoolean(sendText, true);
+
+    // ============================================================
+    // MEDIA FILES
+    // ============================================================
+
     let finalMediaFiles = Array.isArray(mediaFiles) ? mediaFiles : [];
+
+    console.log("\n========== BULK CONTACT MEDIA DEBUG ==========");
+    console.log("req.files:", req.files);
+    console.log("req.files length:", req.files?.length || 0);
+    console.log("==============================================\n");
 
     // Files uploaded through API
     if (req.files && req.files.length > 0) {
@@ -512,7 +548,10 @@ exports.bulkContactSendMessage = async (req, res) => {
       finalMediaFiles = [...finalMediaFiles, ...uploadedFiles];
     }
 
-    // Parse recipients
+    // ============================================================
+    // PARSE RECIPIENTS
+    // ============================================================
+
     const parsedRecipients = parseJsonField(recipients);
     const parsedContacts = parseJsonField(contacts);
     const parsedContactIds = parseJsonField(contactIds);
@@ -529,10 +568,16 @@ exports.bulkContactSendMessage = async (req, res) => {
       recipients: recipientInput,
     };
 
-    // Get complete contact list
+    // ============================================================
+    // EXPAND RECIPIENTS
+    // ============================================================
+
     const list = await expandRecipients(body, req.user._id);
 
-    // Validate message or media
+    // ============================================================
+    // VALIDATE MESSAGE / MEDIA
+    // ============================================================
+
     if (!message && !finalMediaFiles.length) {
       return res.status(400).json({
         success: false,
@@ -540,7 +585,10 @@ exports.bulkContactSendMessage = async (req, res) => {
       });
     }
 
-    // Validate contacts
+    // ============================================================
+    // VALIDATE RECIPIENTS
+    // ============================================================
+
     if (!list.length) {
       return res.status(400).json({
         success: false,
@@ -548,7 +596,36 @@ exports.bulkContactSendMessage = async (req, res) => {
       });
     }
 
-    // Parse devices
+    // ============================================================
+    // SCHEDULE DATE
+    // ============================================================
+
+    const runAt = scheduledAt ? new Date(scheduledAt) : null;
+
+    if (runAt && Number.isNaN(runAt.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid scheduledAt",
+      });
+    }
+
+    // ============================================================
+    // END DATE
+    // ============================================================
+
+    const parsedEndDate = endDate ? new Date(endDate) : null;
+
+    if (parsedEndDate && Number.isNaN(parsedEndDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid endDate",
+      });
+    }
+
+    // ============================================================
+    // PARSE DEVICES
+    // ============================================================
+
     const parsedDeviceIds = parseJsonField(deviceIds);
 
     const ids =
@@ -558,7 +635,10 @@ exports.bulkContactSendMessage = async (req, res) => {
           ? [deviceId]
           : [];
 
-    // Device validation
+    // ============================================================
+    // DEVICE VALIDATION
+    // ============================================================
+
     if (!ids.length) {
       return res.status(400).json({
         success: false,
@@ -566,33 +646,64 @@ exports.bulkContactSendMessage = async (req, res) => {
       });
     }
 
+    // ============================================================
+    // CAMPAIGN DATA
+    // ============================================================
+
     const data = {
       name: name || `Bulk Contact Message ${new Date().toISOString()}`,
 
       message,
-      sendText: sendText !== false,
 
+      sendText: shouldSendText,
+
+      // Uploaded + existing media
       mediaFiles: finalMediaFiles,
 
       recipients: list.length,
+
       sent: 0,
       delivered: 0,
       read: 0,
       failed: 0,
 
-      // Immediately sending
-      status: "Running",
+      // ========================================================
+      // SAME STATUS LOGIC AS createCampaign
+      // ========================================================
 
-      // NO scheduledAt
-      scheduledAt: null,
-      nextRunAt: null,
+      status: shouldSendNow ? "Running" : runAt ? "Scheduled" : "Draft",
+
+      // ========================================================
+      // SCHEDULE
+      // ========================================================
+
+      scheduledAt: runAt,
+      nextRunAt: runAt,
+
+      timezone,
+      repeat,
+
+      endDate: parsedEndDate,
+
+      // ========================================================
+      // DEVICES
+      // ========================================================
 
       device: ids.length === 1 ? ids[0] : undefined,
+
       deviceIds: ids,
+
+      // ========================================================
+      // DATABASE CONTACTS
+      // ========================================================
 
       contacts: isMongoConnected()
         ? list.map((x) => x._id).filter(Boolean)
         : [],
+
+      // ========================================================
+      // DIRECT RECIPIENTS
+      // ========================================================
 
       directRecipients: list
         .filter((x) => !x._id)
@@ -602,35 +713,71 @@ exports.bulkContactSendMessage = async (req, res) => {
           whatsappId: x.whatsappId || x.jid || "",
         })),
 
+      // ========================================================
+      // ESTIMATED TIME
+      // ========================================================
+
       estimatedTimeMinutes: Math.ceil(
         list.length / Math.max(1, ids.length) / 80,
       ),
     };
 
-    // Save campaign
+    console.log("\n========== BULK CONTACT CAMPAIGN ==========");
+
+    console.log("User ID:", req.user._id);
+    console.log("Recipients:", list.length);
+    console.log("Devices:", ids);
+    console.log("Send Now:", shouldSendNow);
+    console.log("Send Text:", shouldSendText);
+    console.log("Scheduled At:", runAt);
+    console.log("Timezone:", timezone);
+    console.log("Repeat:", repeat);
+    console.log("End Date:", parsedEndDate);
+    console.log("Media Files:", finalMediaFiles);
+
+    console.log("===========================================\n");
+
+    // ============================================================
+    // SAVE CAMPAIGN
+    // ============================================================
+
     const campaign = await persistCampaign(data, req);
 
-    // Send immediately in background
-    executeCampaign(campaign, list).catch(async (e) => {
-      console.error("[Bulk Contact Message] send error:", e.message);
+    // ============================================================
+    // IMMEDIATE SEND
+    // ============================================================
 
-      if (isMongoConnected()) {
-        await Campaign.findByIdAndUpdate(campaign._id, {
-          status: "Failed",
-          failed: list.length,
-          completedAt: new Date(),
-        });
-      } else {
-        campaign.status = "Failed";
-        campaign.failed = list.length;
-      }
-    });
+    if (shouldSendNow) {
+      executeCampaign(campaign, list).catch(async (e) => {
+        console.error("[Bulk Contact Message] send error:", e.message);
+
+        if (isMongoConnected()) {
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            status: "Failed",
+            failed: list.length,
+            completedAt: new Date(),
+          });
+        } else {
+          campaign.status = "Failed";
+          campaign.failed = list.length;
+        }
+      });
+    }
+
+    // ============================================================
+    // RESPONSE
+    // ============================================================
 
     return res.status(201).json({
       success: true,
-      message: "Bulk contact message accepted and sending in background",
       data: campaign,
       queued: list.length,
+
+      message: shouldSendNow
+        ? "Campaign accepted and sending in background"
+        : runAt
+          ? "Campaign scheduled"
+          : "Campaign saved as draft",
     });
   } catch (error) {
     console.error("[Bulk Contact Message] error:", error);
