@@ -832,6 +832,51 @@ router.post(
     'scheduleContactAdd.addScheduleContact'
   )
 );
+
+router.get(
+  '/schedule-contact-add',
+  protect,
+  h(
+    scheduleContactAdd.getScheduleContacts,
+    'scheduleContactAdd.getScheduleContacts'
+  )
+);
+
+router.get(
+  '/schedule-contact-add/:id',
+  protect,
+  h(
+    scheduleContactAdd.getScheduleContact,
+    'scheduleContactAdd.getScheduleContact'
+  )
+);
+
+router.put(
+  '/schedule-contact-add/:id',
+  protect,
+  h(
+    scheduleContactAdd.updateScheduleContact,
+    'scheduleContactAdd.updateScheduleContact'
+  )
+);
+
+router.delete(
+  '/schedule-contact-add/:id',
+  protect,
+  h(
+    scheduleContactAdd.deleteScheduleContact,
+    'scheduleContactAdd.deleteScheduleContact'
+  )
+);
+
+router.delete(
+  '/schedule-contact-add',
+  protect,
+  h(
+    scheduleContactAdd.deleteAllScheduleContacts,
+    'scheduleContactAdd.deleteAllScheduleContacts'
+  )
+);
 // ============================================================
 // LIVE WHATSAPP CONTACTS / NOTEBOOK / SCHEDULE
 // ============================================================
