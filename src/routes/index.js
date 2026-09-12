@@ -12,6 +12,7 @@ const m5 = require('../controllers/module5Controller');
 const tools = require('../controllers/toolsController');
 const waContacts = require('../controllers/waContactsController');
 const whatsappReminderController = require("../controllers/whatsappReminderController");
+const scheduleContactAdd = require("../controllers/scheduleContactAddController");
 const notifications = require('../controllers/notificationController');
 const h = (fn, name) =>
   typeof fn === 'function'
@@ -819,7 +820,18 @@ router.post(
   protect,
   h(m5.retryOne, 'm5.retryOne')
 );
+// ============================================================
+// SCHEDULE CONTACT ADD
+// ============================================================
 
+router.post(
+  '/schedule-contact-add',
+  protect,
+  h(
+    scheduleContactAdd.addScheduleContact,
+    'scheduleContactAdd.addScheduleContact'
+  )
+);
 // ============================================================
 // LIVE WHATSAPP CONTACTS / NOTEBOOK / SCHEDULE
 // ============================================================
