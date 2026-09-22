@@ -13,6 +13,9 @@ const { init } = require('./utils/memoryStore');
 const wa = require('./services/whatsappService');
 const { startScheduler } = require('./utils/campaignScheduler');
 const {
+  startBulkDayScheduleScheduler,
+} = require("./utils/bulkDayScheduleScheduler");
+const {
   startOneDayReminderScheduler,
 } = require('./utils/oneDayReminderScheduler');
 
@@ -154,7 +157,7 @@ try {
 // Start schedulers only after WhatsApp sessions are restored
 startScheduler();
 startOneDayReminderScheduler();
-
+startBulkDayScheduleScheduler();
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.error(

@@ -334,6 +334,27 @@ router.post(
   authorize("Administrator", "Manager", "Operator"),
   bulkDayScheduleController.create,
 );
+
+router.get(
+  "/bulk-day-schedules",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  bulkDayScheduleController.list,
+);
+
+router.patch(
+  "/bulk-day-schedules/:id/status",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  bulkDayScheduleController.updateStatus,
+);
+
+router.delete(
+  "/bulk-day-schedules/:id",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  bulkDayScheduleController.remove,
+);
 router.get(
   '/campaigns/:id',
   protect,

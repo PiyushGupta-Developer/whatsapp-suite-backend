@@ -36,7 +36,10 @@ const bulkDayScheduleSchema = new mongoose.Schema(
       enum: ["active", "stopped"],
       default: "active",
     },
-
+    isProcessing: {
+      type: Boolean,
+      default: false,
+    },
     cronExpression: {
       type: String,
       default: null,
