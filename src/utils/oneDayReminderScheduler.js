@@ -55,6 +55,8 @@ const sendFixedWhatsAppReminders = async (contact) => {
     const notificationMessage = `
 🔔 REMINDER ALERT
 
+👤 Name: ${contact.name || "N/A"}
+
 📱 Contact Phone: ${contact.phone || "N/A"}
 
 📅 Event Date & Time: ${eventDate}

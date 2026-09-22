@@ -14,6 +14,7 @@ const waContacts = require('../controllers/waContactsController');
 const whatsappReminderController = require("../controllers/whatsappReminderController");
 const scheduleContactAdd = require("../controllers/scheduleContactAddController");
 const notifications = require('../controllers/notificationController');
+const bulkDayScheduleController = require("../controllers/bulkDayScheduleController");
 const h = (fn, name) =>
   typeof fn === 'function'
     ? fn
@@ -326,6 +327,12 @@ router.post(
   authorize("Administrator", "Manager", "Operator"),
   media.upload.array("files", 10),
   h(campaigns.bulkContactSendMessage, "bulk-contact-send-message"),
+);
+router.post(
+  "/bulk-day-schedule",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  bulkDayScheduleController.create,
 );
 router.get(
   '/campaigns/:id',
