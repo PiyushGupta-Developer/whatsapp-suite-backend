@@ -332,6 +332,7 @@ router.post(
   "/bulk-day-schedule",
   protect,
   authorize("Administrator", "Manager", "Operator"),
+  media.upload.array("files", 10),
   bulkDayScheduleController.create,
 );
 

@@ -36,10 +36,13 @@ const bulkDayScheduleSchema = new mongoose.Schema(
       enum: ["active", "stopped"],
       default: "active",
     },
+
+    // Prevent duplicate scheduler execution
     isProcessing: {
       type: Boolean,
       default: false,
     },
+
     cronExpression: {
       type: String,
       default: null,
@@ -96,11 +99,19 @@ const bulkDayScheduleSchema = new mongoose.Schema(
       },
     ],
 
+    // Text message
     message: {
       type: String,
       default: "",
     },
 
+    // Uploaded media files
+    mediaFiles: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+
+    // Delay between messages
     delaySeconds: {
       type: Number,
       default: 0,

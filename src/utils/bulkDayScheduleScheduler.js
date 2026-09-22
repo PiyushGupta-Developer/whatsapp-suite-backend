@@ -105,11 +105,21 @@ function calculateNextRun(schedule, currentDate = new Date()) {
 
 /**
  * Build message items for messageService.sendBulk()
+ *
+ * IMPORTANT:
+ * Media files are taken from schedule.mediaFiles
+ * and passed to messageService.
  */
 function buildMessageItems(schedule) {
   const recipients = Array.isArray(schedule.recipients)
     ? schedule.recipients
     : [];
+
+  const mediaFiles = Array.isArray(schedule.mediaFiles)
+    ? schedule.mediaFiles
+    : [];
+
+  const message = String(schedule.message || "").trim();
 
   return recipients
     .filter((recipient) => recipient && recipient.phone)
@@ -117,9 +127,18 @@ function buildMessageItems(schedule) {
       phone: recipient.phone,
       jid: recipient.whatsappId || undefined,
       contact: recipient,
-      message: schedule.message || "",
-      sendText: true,
-      mediaFiles: [],
+
+      // Text message
+      message,
+
+      // If message exists, send text.
+      // If only media exists, text sending is false.
+      sendText: Boolean(message),
+
+      // IMPORTANT:
+      // Saved media from MongoDB will now
+      // reach messageService.sendBulk()
+      mediaFiles,
     }));
 }
 
@@ -158,6 +177,26 @@ async function executeBulkDaySchedule(schedule) {
     }
 
     /**
+     * Check message/media.
+     */
+    const hasMessage = Boolean(String(schedule.message || "").trim());
+
+    const hasMedia =
+      Array.isArray(schedule.mediaFiles) && schedule.mediaFiles.length > 0;
+
+    if (!hasMessage && !hasMedia) {
+      console.log("[BulkDayScheduler] No message or media:", scheduleId);
+
+      await BulkDaySchedule.findByIdAndUpdate(schedule._id, {
+        $set: {
+          isProcessing: false,
+        },
+      });
+
+      return;
+    }
+
+    /**
      * No WhatsApp devices
      */
     const devices = getDevices(schedule);
@@ -179,10 +218,20 @@ async function executeBulkDaySchedule(schedule) {
       items.length,
       "Devices:",
       devices.length,
+      "Media files:",
+      hasMedia ? schedule.mediaFiles.length : 0,
+      "Has message:",
+      hasMessage,
     );
 
     /**
      * Send messages
+     *
+     * messageService will receive:
+     * - phone
+     * - message
+     * - sendText
+     * - mediaFiles
      */
     const result = await messageService.sendBulk(items, devices);
 
@@ -196,14 +245,17 @@ async function executeBulkDaySchedule(schedule) {
       total: items.length,
       sent,
       failed,
+      mediaFiles: hasMedia ? schedule.mediaFiles.length : 0,
     });
 
     /**
-     * If recurring:
-     * calculate next occurrence.
+     * Calculate next occurrence.
      *
-     * If one-time:
-     * stop after execution.
+     * Recurring schedule:
+     * calculate next run.
+     *
+     * One-time schedule:
+     * nextRunAt = null.
      */
     let nextRunAt = null;
 
@@ -212,12 +264,10 @@ async function executeBulkDaySchedule(schedule) {
     }
 
     /**
-     * IMPORTANT:
-     *
      * Do not blindly set status = active.
      *
-     * User may have manually stopped
-     * the schedule while sending.
+     * User may have stopped the schedule
+     * while sending was running.
      */
     const updated = await BulkDaySchedule.findOneAndUpdate(
       {
@@ -240,8 +290,6 @@ async function executeBulkDaySchedule(schedule) {
      * If user stopped the schedule while
      * execution was running, the above query
      * will not match.
-     *
-     * Only release processing lock.
      */
     if (!updated) {
       await BulkDaySchedule.findByIdAndUpdate(schedule._id, {
@@ -263,13 +311,9 @@ async function executeBulkDaySchedule(schedule) {
     console.error("[BulkDayScheduler] Execution error:", scheduleId, error);
 
     /**
-     * IMPORTANT:
+     * Release processing lock.
      *
-     * Don't automatically stop the schedule
-     * when WhatsApp sending fails.
-     *
-     * Release lock so it can be processed again
-     * according to the next scheduler cycle.
+     * Do not automatically stop schedule.
      */
     await BulkDaySchedule.findByIdAndUpdate(schedule._id, {
       $set: {
@@ -284,8 +328,8 @@ async function executeBulkDaySchedule(schedule) {
  */
 async function tick() {
   /**
-   * Prevent overlapping ticks inside the same
-   * Node.js process.
+   * Prevent overlapping ticks inside
+   * the same Node.js process.
    */
   if (isTickRunning) {
     return;
@@ -300,9 +344,6 @@ async function tick() {
 
     /**
      * Find active schedules which are due.
-     *
-     * IMPORTANT:
-     * isProcessing must be false.
      */
     const dueSchedules = await BulkDaySchedule.find({
       status: "active",
@@ -327,8 +368,6 @@ async function tick() {
        * becomes:
        *
        * active + isProcessing:true
-       *
-       * This prevents duplicate execution.
        */
       const lockedSchedule = await BulkDaySchedule.findOneAndUpdate(
         {
@@ -404,6 +443,7 @@ function startBulkDayScheduleScheduler() {
 function stopBulkDayScheduleScheduler() {
   if (timer) {
     clearInterval(timer);
+
     timer = null;
 
     console.log("[BulkDayScheduler] Scheduler stopped");

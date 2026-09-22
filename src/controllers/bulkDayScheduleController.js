@@ -42,28 +42,118 @@ function getUserId(req) {
 }
 
 /**
+ * Parse JSON fields.
+ *
+ * This is useful because:
+ *
+ * JSON request:
+ *   deviceIds = [...]
+ *
+ * multipart/form-data:
+ *   deviceIds = "[...]"
+ */
+function parseJsonField(value, fallback = []) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+
+      return Array.isArray(parsed) ? parsed : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  return fallback;
+}
+
+/**
+ * Create media objects from multer files
+ */
+function buildMediaFiles(files = []) {
+  if (!Array.isArray(files)) {
+    return [];
+  }
+
+  return files.map((file) => {
+    let type = "Document";
+
+    if (typeof file.mimetype === "string") {
+      if (file.mimetype.startsWith("image/")) {
+        type = "Image";
+      } else if (file.mimetype.startsWith("video/")) {
+        type = "Video";
+      } else if (file.mimetype.startsWith("audio/")) {
+        type = "Audio";
+      }
+    }
+
+    return {
+      filename: file.filename,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      path: `/uploads/${file.filename}`,
+      type,
+    };
+  });
+}
+
+/**
  * Create Bulk Day Schedule
  *
  * POST /api/bulk-day-schedule
  */
 exports.create = async (req, res) => {
   try {
-    const {
-      name,
-      scheduleType,
-      recurring = false,
-      dayOfMonth,
-      time,
-      status = "active",
-      cronExpression,
-      selectedMonths = [],
-      year,
-      calculatedDates = [],
-      deviceIds = [],
-      recipients = [],
-      message = "",
-      delaySeconds = 0,
-    } = req.body;
+    /**
+     * -----------------------------------------
+     * Parse body fields
+     * -----------------------------------------
+     */
+
+    const name = req.body.name;
+
+    const scheduleType = req.body.scheduleType;
+
+    const recurring = req.body.recurring ?? false;
+
+    const dayOfMonth = req.body.dayOfMonth;
+
+    const time = req.body.time;
+
+    const status = req.body.status || "active";
+
+    const cronExpression = req.body.cronExpression;
+
+    const selectedMonths = parseJsonField(req.body.selectedMonths, []);
+
+    const year = req.body.year;
+
+    const calculatedDates = parseJsonField(req.body.calculatedDates, []);
+
+    const deviceIds = parseJsonField(req.body.deviceIds, []);
+
+    const recipients = parseJsonField(req.body.recipients, []);
+
+    const message = req.body.message || "";
+
+    const delaySeconds = req.body.delaySeconds ?? 0;
+
+    /**
+     * -----------------------------------------
+     * Uploaded media files
+     * -----------------------------------------
+     */
+
+    const mediaFiles = buildMediaFiles(req.files || []);
 
     // -----------------------------------------
     // 1. User authentication
@@ -165,7 +255,18 @@ exports.create = async (req, res) => {
     }
 
     // -----------------------------------------
-    // 9. Validate delay
+    // 9. Validate message/media
+    // -----------------------------------------
+
+    if (!String(message).trim() && mediaFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Message or media file is required",
+      });
+    }
+
+    // -----------------------------------------
+    // 10. Validate delay
     // -----------------------------------------
 
     const parsedDelay = Number(delaySeconds);
@@ -178,7 +279,7 @@ exports.create = async (req, res) => {
     }
 
     // -----------------------------------------
-    // 10. Prepare common values
+    // 11. Prepare common values
     // -----------------------------------------
 
     let nextRunAt = null;
@@ -187,12 +288,14 @@ exports.create = async (req, res) => {
 
     const normalizedRecipients = recipients.map((recipient) => ({
       name: recipient.name || "",
+
       phone: String(recipient.phone).trim(),
+
       whatsappId: recipient.whatsappId || "",
     }));
 
     // -----------------------------------------
-    // 11. FIFTEENTH DAY
+    // 12. FIFTEENTH DAY
     // -----------------------------------------
 
     if (scheduleType === "fifteenth_day") {
@@ -207,7 +310,7 @@ exports.create = async (req, res) => {
     }
 
     // -----------------------------------------
-    // 12. MONTH END
+    // 13. MONTH END
     // -----------------------------------------
 
     if (scheduleType === "month_end") {
@@ -238,7 +341,7 @@ exports.create = async (req, res) => {
       const uniqueMonths = [...new Set(normalizedMonths)].sort((a, b) => a - b);
 
       // Year validation
-      if (year !== undefined && year !== null) {
+      if (year !== undefined && year !== null && year !== "") {
         const parsedYear = Number(year);
 
         if (
@@ -280,8 +383,8 @@ exports.create = async (req, res) => {
       /**
        * If recurring is true and all
        * calculatedDates are in the past,
-       * the scheduler will calculate the
-       * next year's month-end itself.
+       * scheduler will calculate next
+       * year's month-end itself.
        */
       if (!nextRunAt && !Boolean(recurring)) {
         return res.status(400).json({
@@ -289,10 +392,17 @@ exports.create = async (req, res) => {
           message: "No future date found in calculatedDates",
         });
       }
+
+      /**
+       * Use unique/sorted months
+       */
+      selectedMonths.length = 0;
+
+      uniqueMonths.forEach((month) => selectedMonths.push(month));
     }
 
     // -----------------------------------------
-    // 13. Create schedule
+    // 14. Create schedule
     // -----------------------------------------
 
     const schedule = await BulkDaySchedule.create({
@@ -302,7 +412,10 @@ exports.create = async (req, res) => {
 
       recurring: Boolean(recurring),
 
-      dayOfMonth: dayOfMonth !== undefined ? Number(dayOfMonth) : null,
+      dayOfMonth:
+        dayOfMonth !== undefined && dayOfMonth !== ""
+          ? Number(dayOfMonth)
+          : null,
 
       time,
 
@@ -325,7 +438,10 @@ exports.create = async (req, res) => {
           ].sort((a, b) => a - b)
         : [],
 
-      year: year !== undefined && year !== null ? Number(year) : null,
+      year:
+        year !== undefined && year !== null && year !== ""
+          ? Number(year)
+          : null,
 
       calculatedDates: Array.isArray(calculatedDates) ? calculatedDates : [],
 
@@ -339,18 +455,22 @@ exports.create = async (req, res) => {
 
       message: typeof message === "string" ? message : String(message || ""),
 
+      // NEW: save uploaded files
+      mediaFiles,
+
       delaySeconds: parsedDelay,
 
       createdBy,
     });
 
     // -----------------------------------------
-    // 14. Response
+    // 15. Response
     // -----------------------------------------
 
     return res.status(201).json({
       success: true,
       message: "Bulk day schedule created successfully",
+
       data: schedule,
     });
   } catch (error) {
@@ -442,17 +562,6 @@ exports.list = async (req, res) => {
  * Update Schedule Status
  *
  * PATCH /api/bulk-day-schedules/:id/status
- *
- * Body:
- * {
- *   "status": "stopped"
- * }
- *
- * or:
- *
- * {
- *   "status": "active"
- * }
  */
 exports.updateStatus = async (req, res) => {
   try {
@@ -469,7 +578,6 @@ exports.updateStatus = async (req, res) => {
 
     const { status } = req.body;
 
-    // Validate status
     if (!["active", "stopped"].includes(status)) {
       return res.status(400).json({
         success: false,
@@ -497,11 +605,11 @@ exports.updateStatus = async (req, res) => {
       schedule.status = "stopped";
 
       /**
-       * Do NOT change isProcessing here.
+       * Do not change isProcessing.
        *
-       * If a message is currently being sent,
-       * scheduler will finish it and release
-       * the lock.
+       * If a message is currently being
+       * sent, scheduler will finish it
+       * and release the lock.
        */
       await schedule.save();
 
@@ -518,7 +626,7 @@ exports.updateStatus = async (req, res) => {
 
     if (status === "active") {
       /**
-       * If this schedule has no nextRunAt,
+       * If schedule has no nextRunAt,
        * calculate a new one.
        */
       if (!schedule.nextRunAt) {
@@ -527,9 +635,6 @@ exports.updateStatus = async (req, res) => {
         }
 
         if (schedule.scheduleType === "month_end") {
-          /**
-           * Use calculatedDates first.
-           */
           const now = new Date();
 
           const futureDate = Array.isArray(schedule.calculatedDates)
