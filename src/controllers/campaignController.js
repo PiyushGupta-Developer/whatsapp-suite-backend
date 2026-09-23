@@ -474,7 +474,283 @@ console.log("Final media files:", finalMediaFiles);
     });
   }
 };
+exports.bulkSchedule = async (req, res) => {
+  try {
+    const {
+      name,
+      message = "",
+      mediaFiles = [],
+      recipients,
+      contacts,
+      contactIds,
+      deviceId,
+      deviceIds,
+      scheduledAt,
+      timezone = "Asia/Kolkata",
+      endDate,
+      sendText = true,
 
+      // New Bulk Schedule recurrence fields
+      bulkRepeatType = "ONE_TIME",
+      bulkRepeatMonths = [],
+    } = req.body;
+
+    // ==============================
+    // BULK SCHEDULE VALIDATION
+    // ==============================
+
+    const allowedBulkRepeatTypes = ["ONE_TIME", "15_DAYS", "MONTHLY"];
+
+    if (!allowedBulkRepeatTypes.includes(bulkRepeatType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid bulkRepeatType",
+      });
+    }
+
+    // multipart/form-data me array string ke form me aa sakta hai
+    const parsedBulkRepeatMonths = parseJsonField(bulkRepeatMonths, []);
+
+    if (!Array.isArray(parsedBulkRepeatMonths)) {
+      return res.status(400).json({
+        success: false,
+        message: "bulkRepeatMonths must be an array",
+      });
+    }
+
+    const normalizedBulkRepeatMonths = parsedBulkRepeatMonths.map(Number);
+
+    // Month values 1-12 hone chahiye
+    if (
+      normalizedBulkRepeatMonths.some(
+        (month) => !Number.isInteger(month) || month < 1 || month > 12,
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "bulkRepeatMonths must contain values from 1 to 12",
+      });
+    }
+
+    // Duplicate months remove
+    const uniqueBulkRepeatMonths = [...new Set(normalizedBulkRepeatMonths)];
+
+    // MONTHLY ke liye kam se kam 1 month required
+    if (bulkRepeatType === "MONTHLY" && uniqueBulkRepeatMonths.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one month is required for MONTHLY schedule",
+      });
+    }
+
+    // ONE_TIME / 15_DAYS me months nahi hone chahiye
+    if (bulkRepeatType !== "MONTHLY" && uniqueBulkRepeatMonths.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "bulkRepeatMonths is only allowed for MONTHLY schedule",
+      });
+    }
+
+    // ==============================
+    // SCHEDULED DATE VALIDATION
+    // ==============================
+
+    if (!scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduledAt is required",
+      });
+    }
+
+    const scheduledDate = new Date(scheduledAt);
+
+    if (Number.isNaN(scheduledDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid scheduledAt",
+      });
+    }
+
+    // Schedule future me hona chahiye
+    if (scheduledDate.getTime() <= Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduledAt must be a future date and time",
+      });
+    }
+
+    // ==============================
+    // END DATE VALIDATION
+    // ==============================
+
+    let parsedEndDate = null;
+
+    if (endDate) {
+      parsedEndDate = new Date(endDate);
+
+      if (Number.isNaN(parsedEndDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid endDate",
+        });
+      }
+
+      if (parsedEndDate.getTime() <= scheduledDate.getTime()) {
+        return res.status(400).json({
+          success: false,
+          message: "endDate must be greater than scheduledAt",
+        });
+      }
+    }
+
+    // ==============================
+    // RECIPIENT PARSING
+    // ==============================
+
+    const parsedRecipients = parseJsonField(recipients, []);
+
+    const parsedContacts = parseJsonField(contacts, []);
+
+    const parsedContactIds = parseJsonField(contactIds, []);
+
+    let recipientInput = [];
+
+    if (parsedRecipients.length > 0) {
+      recipientInput = parsedRecipients;
+    } else if (parsedContacts.length > 0) {
+      recipientInput = parsedContacts;
+    } else if (parsedContactIds.length > 0) {
+      recipientInput = parsedContactIds;
+    }
+
+    const recipientBody = {
+      ...req.body,
+      recipients: recipientInput,
+    };
+
+    const expandedRecipients = await expandRecipients(
+      recipientBody,
+      req.user._id,
+    );
+
+    if (!Array.isArray(expandedRecipients) || expandedRecipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one recipient is required",
+      });
+    }
+
+    // ==============================
+    // DEVICE VALIDATION
+    // ==============================
+
+    let parsedDeviceIds = [];
+
+    if (deviceIds) {
+      parsedDeviceIds = parseJsonField(deviceIds, []);
+    }
+
+    if (!Array.isArray(parsedDeviceIds) || parsedDeviceIds.length === 0) {
+      if (deviceId) {
+        parsedDeviceIds = [deviceId];
+      }
+    }
+
+    parsedDeviceIds = [...new Set(parsedDeviceIds.filter(Boolean).map(String))];
+
+    if (parsedDeviceIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one WhatsApp device is required",
+      });
+    }
+
+    // ==============================
+    // MEDIA FILES
+    // ==============================
+
+    let uploadedMediaFiles = [];
+
+    if (Array.isArray(req.files) && req.files.length > 0) {
+      uploadedMediaFiles = req.files.map((file) => ({
+        filename: file.filename,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        path: file.path,
+      }));
+    }
+
+    // Agar mediaFiles JSON se bhi aaye hain
+    const parsedMediaFiles = parseJsonField(mediaFiles, []);
+
+    if (uploadedMediaFiles.length === 0 && Array.isArray(parsedMediaFiles)) {
+      uploadedMediaFiles = parsedMediaFiles;
+    }
+
+    // ==============================
+    // CAMPAIGN DATA
+    // ==============================
+
+    const campaignData = {
+      name: name || `Bulk Schedule ${new Date().toISOString()}`,
+
+      message,
+
+      sendText: sendText === false || sendText === "false" ? false : true,
+
+      mediaFiles: uploadedMediaFiles,
+
+      recipients: expandedRecipients,
+
+      deviceIds: parsedDeviceIds,
+
+      device: deviceId || parsedDeviceIds[0] || null,
+
+      scheduledAt: scheduledDate,
+
+      nextRunAt: scheduledDate,
+
+      timezone,
+
+      // Old repeat system untouched
+      repeat: "No Repeat",
+
+      endDate: parsedEndDate,
+
+      // ==============================
+      // NEW BULK REPEAT SYSTEM
+      // ==============================
+
+      bulkRepeatType,
+
+      bulkRepeatMonths: uniqueBulkRepeatMonths,
+
+      status: "Scheduled",
+
+      createdBy: req.user?._id || null,
+    };
+
+    // ==============================
+    // SAVE CAMPAIGN
+    // ==============================
+
+    const campaign = await persistCampaign(campaignData, req);
+
+    return res.status(201).json({
+      success: true,
+      message: "Bulk campaign scheduled successfully",
+      campaign,
+    });
+  } catch (error) {
+    console.error("[Bulk Schedule] error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 exports.bulkContactSendMessage = async (req, res) => {
   try {
     const {
