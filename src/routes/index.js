@@ -314,13 +314,13 @@ router.post(
 // ================================
 // BULK SCHEDULE API
 // ================================
-router.post(
-  '/bulk-schedule',
-  protect,
-  authorize('Administrator', 'Manager', 'Operator'),
-  media.upload.array('files', 10),
-  h(campaigns.createCampaign, 'bulk-schedule')
-);
+// router.post(
+//   '/bulk-schedule',
+//   protect,
+//   authorize('Administrator', 'Manager', 'Operator'),
+//   media.upload.array('files', 10),
+//   h(campaigns.createCampaign, 'bulk-schedule')
+// );
 router.post(
   "/bulk-schedule",
   protect,
