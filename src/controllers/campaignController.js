@@ -701,7 +701,9 @@ exports.bulkSchedule = async (req, res) => {
 
       mediaFiles: uploadedMediaFiles,
 
-      recipients: expandedRecipients,
+      recipients: expandedRecipients.length,
+
+      directRecipients: expandedRecipients,
 
       deviceIds: parsedDeviceIds,
 
