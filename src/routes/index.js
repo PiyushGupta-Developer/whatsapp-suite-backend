@@ -329,6 +329,12 @@ router.post(
   h(campaigns.bulkSchedule, "bulk-schedule"),
 );
 router.post(
+  "/bulk-schedule/:id/stop",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  h(campaigns.stopBulkSchedule, "bulk-schedule-stop"),
+);
+router.post(
   "/bulk-contact-send-message",
   protect,
   authorize("Administrator", "Manager", "Operator"),

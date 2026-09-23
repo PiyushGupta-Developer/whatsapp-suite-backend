@@ -9,7 +9,15 @@ const campaignSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["Draft", "Scheduled", "Running", "Completed", "Failed", "Paused"],
+      enum: [
+        "Draft",
+        "Scheduled",
+        "Running",
+        "Completed",
+        "Failed",
+        "Paused",
+        "Stopped",
+      ],
       default: "Draft",
     },
 
@@ -53,6 +61,14 @@ const campaignSchema = new mongoose.Schema(
     bulkRepeatMonths: {
       type: [Number],
       default: [],
+    },
+    bulkRepeatCompletedMonths: {
+      type: [Number],
+      default: [],
+    },
+    isBulkSchedule: {
+      type: Boolean,
+      default: false,
     },
     estimatedTimeMinutes: { type: Number },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

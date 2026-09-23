@@ -487,7 +487,6 @@ exports.bulkSchedule = async (req, res) => {
       deviceIds,
       scheduledAt,
       timezone = "Asia/Kolkata",
-      endDate,
       sendText = true,
 
       // New Bulk Schedule recurrence fields
@@ -508,7 +507,10 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // multipart/form-data me array string ke form me aa sakta hai
+    // ==============================
+    // MONTH PARSING
+    // ==============================
+
     const parsedBulkRepeatMonths = parseJsonField(bulkRepeatMonths, []);
 
     if (!Array.isArray(parsedBulkRepeatMonths)) {
@@ -520,7 +522,7 @@ exports.bulkSchedule = async (req, res) => {
 
     const normalizedBulkRepeatMonths = parsedBulkRepeatMonths.map(Number);
 
-    // Month values 1-12 hone chahiye
+    // Month values must be 1-12
     if (
       normalizedBulkRepeatMonths.some(
         (month) => !Number.isInteger(month) || month < 1 || month > 12,
@@ -532,10 +534,12 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // Duplicate months remove
-    const uniqueBulkRepeatMonths = [...new Set(normalizedBulkRepeatMonths)];
+    // Remove duplicate months
+    const uniqueBulkRepeatMonths = [
+      ...new Set(normalizedBulkRepeatMonths),
+    ].sort((a, b) => a - b);
 
-    // MONTHLY ke liye kam se kam 1 month required
+    // MONTHLY requires at least one month
     if (bulkRepeatType === "MONTHLY" && uniqueBulkRepeatMonths.length === 0) {
       return res.status(400).json({
         success: false,
@@ -543,7 +547,7 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ONE_TIME / 15_DAYS me months nahi hone chahiye
+    // ONE_TIME / 15_DAYS cannot have months
     if (bulkRepeatType !== "MONTHLY" && uniqueBulkRepeatMonths.length > 0) {
       return res.status(400).json({
         success: false,
@@ -562,7 +566,7 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    const scheduledDate = new Date(scheduledAt);
+    let scheduledDate = new Date(scheduledAt);
 
     if (Number.isNaN(scheduledDate.getTime())) {
       return res.status(400).json({
@@ -580,27 +584,72 @@ exports.bulkSchedule = async (req, res) => {
     }
 
     // ==============================
-    // END DATE VALIDATION
+    // MONTHLY FIRST DATE CALCULATION
     // ==============================
 
-    let parsedEndDate = null;
+    if (bulkRepeatType === "MONTHLY") {
+      const originalDay = scheduledDate.getDate();
+      const originalHours = scheduledDate.getHours();
+      const originalMinutes = scheduledDate.getMinutes();
+      const originalSeconds = scheduledDate.getSeconds();
+      const originalMilliseconds = scheduledDate.getMilliseconds();
 
-    if (endDate) {
-      parsedEndDate = new Date(endDate);
+      const currentMonth = scheduledDate.getMonth() + 1;
 
-      if (Number.isNaN(parsedEndDate.getTime())) {
+      let firstMonthlyDate = null;
+
+      // Current month se lekar next 12 months tak search
+      for (let offset = 0; offset < 12; offset++) {
+        const candidate = new Date(scheduledDate);
+
+        candidate.setMonth(scheduledDate.getMonth() + offset);
+
+        const candidateMonth = candidate.getMonth() + 1;
+
+        // Sirf selected month
+        if (!uniqueBulkRepeatMonths.includes(candidateMonth)) {
+          continue;
+        }
+
+        // Month ke andar original date valid hai ya nahi
+        candidate.setDate(1);
+        candidate.setHours(
+          originalHours,
+          originalMinutes,
+          originalSeconds,
+          originalMilliseconds,
+        );
+
+        const daysInMonth = new Date(
+          candidate.getFullYear(),
+          candidateMonth,
+          0,
+        ).getDate();
+
+        if (originalDay > daysInMonth) {
+          continue;
+        }
+
+        candidate.setDate(originalDay);
+
+        // Agar current month selected hai,
+        // to future scheduled date use hogi.
+        // Agar current month selected nahi hai,
+        // to next selected month milega.
+        if (candidate.getTime() >= scheduledDate.getTime()) {
+          firstMonthlyDate = candidate;
+          break;
+        }
+      }
+
+      if (!firstMonthlyDate) {
         return res.status(400).json({
           success: false,
-          message: "Invalid endDate",
+          message: "No valid selected month found for the scheduled date",
         });
       }
 
-      if (parsedEndDate.getTime() <= scheduledDate.getTime()) {
-        return res.status(400).json({
-          success: false,
-          message: "endDate must be greater than scheduledAt",
-        });
-      }
+      scheduledDate = firstMonthlyDate;
     }
 
     // ==============================
@@ -718,8 +767,6 @@ exports.bulkSchedule = async (req, res) => {
       // Old repeat system untouched
       repeat: "No Repeat",
 
-      endDate: parsedEndDate,
-
       // ==============================
       // NEW BULK REPEAT SYSTEM
       // ==============================
@@ -728,6 +775,9 @@ exports.bulkSchedule = async (req, res) => {
 
       bulkRepeatMonths: uniqueBulkRepeatMonths,
 
+      // Monthly cycle tracking
+      bulkRepeatCompletedMonths: [],
+      isBulkSchedule: true,
       status: "Scheduled",
 
       createdBy: req.user?._id || null,
@@ -746,6 +796,120 @@ exports.bulkSchedule = async (req, res) => {
     });
   } catch (error) {
     console.error("[Bulk Schedule] error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+exports.stopBulkSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const scheduleId = req.params.id;
+
+    // ==============================
+    // MONGODB
+    // ==============================
+
+    if (isMongoConnected()) {
+      const campaign = await Campaign.findOne({
+        _id: scheduleId,
+        createdBy: userId,
+      });
+
+      if (!campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Bulk schedule not found",
+        });
+      }
+
+      // Sirf new bulk repeat schedules ko stop karna hai
+      if (!["15_DAYS", "MONTHLY"].includes(campaign.bulkRepeatType)) {
+        return res.status(400).json({
+          success: false,
+          message: "This campaign is not a recurring bulk schedule",
+        });
+      }
+
+      if (campaign.status === "Stopped") {
+        return res.status(400).json({
+          success: false,
+          message: "Bulk schedule is already stopped",
+        });
+      }
+
+      if (campaign.status === "Completed") {
+        return res.status(400).json({
+          success: false,
+          message: "Bulk schedule is already completed",
+        });
+      }
+
+      campaign.status = "Stopped";
+      campaign.nextRunAt = null;
+
+      await campaign.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Bulk schedule stopped successfully",
+        campaign,
+      });
+    }
+
+    // ==============================
+    // MEMORY STORE
+    // ==============================
+
+    await init();
+
+    const campaign = store.campaigns.find(
+      (c) =>
+        String(c._id) === String(scheduleId) &&
+        String(c.createdBy) === String(userId),
+    );
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: "Bulk schedule not found",
+      });
+    }
+
+    if (!["15_DAYS", "MONTHLY"].includes(campaign.bulkRepeatType)) {
+      return res.status(400).json({
+        success: false,
+        message: "This campaign is not a recurring bulk schedule",
+      });
+    }
+
+    if (campaign.status === "Stopped") {
+      return res.status(400).json({
+        success: false,
+        message: "Bulk schedule is already stopped",
+      });
+    }
+
+    if (campaign.status === "Completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Bulk schedule is already completed",
+      });
+    }
+
+    campaign.status = "Stopped";
+    campaign.nextRunAt = null;
+    campaign.updatedAt = new Date().toISOString();
+
+    return res.status(200).json({
+      success: true,
+      message: "Bulk schedule stopped successfully",
+      campaign,
+    });
+  } catch (error) {
+    console.error("[Bulk Schedule Stop] error:", error);
 
     return res.status(400).json({
       success: false,
