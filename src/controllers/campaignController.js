@@ -489,16 +489,19 @@ exports.bulkSchedule = async (req, res) => {
       timezone = "Asia/Kolkata",
       sendText = true,
 
-      // New Bulk Schedule recurrence fields
+      // Bulk Schedule recurrence
       bulkRepeatType = "ONE_TIME",
       bulkRepeatMonths = [],
+
+      // Optional end date for recurring schedules
+      endDate,
     } = req.body;
 
-    // ==============================
-    // BULK SCHEDULE VALIDATION
-    // ==============================
+    // ============================================================
+    // BULK REPEAT TYPE VALIDATION
+    // ============================================================
 
-    const allowedBulkRepeatTypes = ["ONE_TIME", "15_DAYS", "MONTHLY"];
+    const allowedBulkRepeatTypes = ["ONE_TIME", "15_DAYS", "WEEKLY", "MONTHLY"];
 
     if (!allowedBulkRepeatTypes.includes(bulkRepeatType)) {
       return res.status(400).json({
@@ -507,9 +510,9 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
     // MONTH PARSING
-    // ==============================
+    // ============================================================
 
     const parsedBulkRepeatMonths = parseJsonField(bulkRepeatMonths, []);
 
@@ -539,7 +542,10 @@ exports.bulkSchedule = async (req, res) => {
       ...new Set(normalizedBulkRepeatMonths),
     ].sort((a, b) => a - b);
 
-    // MONTHLY requires at least one month
+    // ============================================================
+    // MONTHLY VALIDATION
+    // ============================================================
+
     if (bulkRepeatType === "MONTHLY" && uniqueBulkRepeatMonths.length === 0) {
       return res.status(400).json({
         success: false,
@@ -547,7 +553,7 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ONE_TIME / 15_DAYS cannot have months
+    // Months are allowed ONLY for MONTHLY
     if (bulkRepeatType !== "MONTHLY" && uniqueBulkRepeatMonths.length > 0) {
       return res.status(400).json({
         success: false,
@@ -555,9 +561,9 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
     // SCHEDULED DATE VALIDATION
-    // ==============================
+    // ============================================================
 
     if (!scheduledAt) {
       return res.status(400).json({
@@ -575,7 +581,7 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // Schedule future me hona chahiye
+    // Schedule must be in future
     if (scheduledDate.getTime() <= Date.now()) {
       return res.status(400).json({
         success: false,
@@ -583,9 +589,41 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
+    // END DATE VALIDATION
+    // ============================================================
+
+    let parsedEndDate = null;
+
+    if (endDate) {
+      parsedEndDate = new Date(endDate);
+
+      if (Number.isNaN(parsedEndDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid endDate",
+        });
+      }
+
+      if (parsedEndDate.getTime() <= scheduledDate.getTime()) {
+        return res.status(400).json({
+          success: false,
+          message: "endDate must be greater than scheduledAt",
+        });
+      }
+    }
+
+    // ONE_TIME ke liye endDate ka koi meaning nahi
+    if (bulkRepeatType === "ONE_TIME" && parsedEndDate) {
+      return res.status(400).json({
+        success: false,
+        message: "endDate is only allowed for recurring bulk schedules",
+      });
+    }
+
+    // ============================================================
     // MONTHLY FIRST DATE CALCULATION
-    // ==============================
+    // ============================================================
 
     if (bulkRepeatType === "MONTHLY") {
       const originalDay = scheduledDate.getDate();
@@ -594,11 +632,9 @@ exports.bulkSchedule = async (req, res) => {
       const originalSeconds = scheduledDate.getSeconds();
       const originalMilliseconds = scheduledDate.getMilliseconds();
 
-      const currentMonth = scheduledDate.getMonth() + 1;
-
       let firstMonthlyDate = null;
 
-      // Current month se lekar next 12 months tak search
+      // Current month se next 12 months tak search
       for (let offset = 0; offset < 12; offset++) {
         const candidate = new Date(scheduledDate);
 
@@ -606,13 +642,14 @@ exports.bulkSchedule = async (req, res) => {
 
         const candidateMonth = candidate.getMonth() + 1;
 
-        // Sirf selected month
+        // Sirf selected months
         if (!uniqueBulkRepeatMonths.includes(candidateMonth)) {
           continue;
         }
 
         // Month ke andar original date valid hai ya nahi
         candidate.setDate(1);
+
         candidate.setHours(
           originalHours,
           originalMinutes,
@@ -626,16 +663,15 @@ exports.bulkSchedule = async (req, res) => {
           0,
         ).getDate();
 
+        // Example:
+        // 31 Jan -> Feb invalid
         if (originalDay > daysInMonth) {
           continue;
         }
 
         candidate.setDate(originalDay);
 
-        // Agar current month selected hai,
-        // to future scheduled date use hogi.
-        // Agar current month selected nahi hai,
-        // to next selected month milega.
+        // Future candidate hona chahiye
         if (candidate.getTime() >= scheduledDate.getTime()) {
           firstMonthlyDate = candidate;
           break;
@@ -652,9 +688,9 @@ exports.bulkSchedule = async (req, res) => {
       scheduledDate = firstMonthlyDate;
     }
 
-    // ==============================
+    // ============================================================
     // RECIPIENT PARSING
-    // ==============================
+    // ============================================================
 
     const parsedRecipients = parseJsonField(recipients, []);
 
@@ -689,9 +725,9 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
     // DEVICE VALIDATION
-    // ==============================
+    // ============================================================
 
     let parsedDeviceIds = [];
 
@@ -705,6 +741,7 @@ exports.bulkSchedule = async (req, res) => {
       }
     }
 
+    // Remove duplicate / empty device IDs
     parsedDeviceIds = [...new Set(parsedDeviceIds.filter(Boolean).map(String))];
 
     if (parsedDeviceIds.length === 0) {
@@ -714,9 +751,9 @@ exports.bulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
     // MEDIA FILES
-    // ==============================
+    // ============================================================
 
     let uploadedMediaFiles = [];
 
@@ -726,20 +763,39 @@ exports.bulkSchedule = async (req, res) => {
         originalName: file.originalname,
         mimeType: file.mimetype,
         size: file.size,
-        path: file.path,
+
+        // IMPORTANT:
+        // Same path as createCampaign
+        path: `/uploads/${file.filename}`,
+
+        type: file.mimetype.startsWith("image/")
+          ? "Image"
+          : file.mimetype.startsWith("video/")
+            ? "Video"
+            : file.mimetype.startsWith("audio/")
+              ? "Audio"
+              : "Document",
       }));
     }
 
-    // Agar mediaFiles JSON se bhi aaye hain
+    // JSON se mediaFiles aaye hain
     const parsedMediaFiles = parseJsonField(mediaFiles, []);
 
     if (uploadedMediaFiles.length === 0 && Array.isArray(parsedMediaFiles)) {
       uploadedMediaFiles = parsedMediaFiles;
     }
 
-    // ==============================
+    // Message ya media me se kam se kam ek required
+    if (!message && uploadedMediaFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Message or mediaFiles required",
+      });
+    }
+
+    // ============================================================
     // CAMPAIGN DATA
-    // ==============================
+    // ============================================================
 
     const campaignData = {
       name: name || `Bulk Schedule ${new Date().toISOString()}`,
@@ -754,38 +810,41 @@ exports.bulkSchedule = async (req, res) => {
 
       directRecipients: expandedRecipients,
 
+      // Devices
       deviceIds: parsedDeviceIds,
 
       device: deviceId || parsedDeviceIds[0] || null,
 
+      // Schedule
       scheduledAt: scheduledDate,
 
       nextRunAt: scheduledDate,
 
       timezone,
 
-      // Old repeat system untouched
+      // Existing normal repeat system ko touch nahi karna
       repeat: "No Repeat",
 
-      // ==============================
-      // NEW BULK REPEAT SYSTEM
-      // ==============================
+      // End date
+      endDate: parsedEndDate,
 
+      // New bulk repeat system
       bulkRepeatType,
 
       bulkRepeatMonths: uniqueBulkRepeatMonths,
 
-      // Monthly cycle tracking
       bulkRepeatCompletedMonths: [],
+
       isBulkSchedule: true,
+
       status: "Scheduled",
 
       createdBy: req.user?._id || null,
     };
 
-    // ==============================
+    // ============================================================
     // SAVE CAMPAIGN
-    // ==============================
+    // ============================================================
 
     const campaign = await persistCampaign(campaignData, req);
 
@@ -808,9 +867,9 @@ exports.stopBulkSchedule = async (req, res) => {
     const userId = req.user._id;
     const scheduleId = req.params.id;
 
-    // ==============================
+    // ============================================================
     // MONGODB
-    // ==============================
+    // ============================================================
 
     if (isMongoConnected()) {
       const campaign = await Campaign.findOne({
@@ -825,14 +884,15 @@ exports.stopBulkSchedule = async (req, res) => {
         });
       }
 
-      // Sirf new bulk repeat schedules ko stop karna hai
-      if (!["15_DAYS", "MONTHLY"].includes(campaign.bulkRepeatType)) {
+      // Only recurring bulk schedules can be manually stopped
+      if (!["15_DAYS", "WEEKLY", "MONTHLY"].includes(campaign.bulkRepeatType)) {
         return res.status(400).json({
           success: false,
           message: "This campaign is not a recurring bulk schedule",
         });
       }
 
+      // Already stopped
       if (campaign.status === "Stopped") {
         return res.status(400).json({
           success: false,
@@ -840,6 +900,7 @@ exports.stopBulkSchedule = async (req, res) => {
         });
       }
 
+      // Already completed
       if (campaign.status === "Completed") {
         return res.status(400).json({
           success: false,
@@ -847,6 +908,7 @@ exports.stopBulkSchedule = async (req, res) => {
         });
       }
 
+      // Stop the schedule
       campaign.status = "Stopped";
       campaign.nextRunAt = null;
 
@@ -859,9 +921,9 @@ exports.stopBulkSchedule = async (req, res) => {
       });
     }
 
-    // ==============================
+    // ============================================================
     // MEMORY STORE
-    // ==============================
+    // ============================================================
 
     await init();
 
@@ -878,13 +940,15 @@ exports.stopBulkSchedule = async (req, res) => {
       });
     }
 
-    if (!["15_DAYS", "MONTHLY"].includes(campaign.bulkRepeatType)) {
+    // Only recurring bulk schedules can be manually stopped
+    if (!["15_DAYS", "WEEKLY", "MONTHLY"].includes(campaign.bulkRepeatType)) {
       return res.status(400).json({
         success: false,
         message: "This campaign is not a recurring bulk schedule",
       });
     }
 
+    // Already stopped
     if (campaign.status === "Stopped") {
       return res.status(400).json({
         success: false,
@@ -892,6 +956,7 @@ exports.stopBulkSchedule = async (req, res) => {
       });
     }
 
+    // Already completed
     if (campaign.status === "Completed") {
       return res.status(400).json({
         success: false,
@@ -899,6 +964,7 @@ exports.stopBulkSchedule = async (req, res) => {
       });
     }
 
+    // Stop the schedule
     campaign.status = "Stopped";
     campaign.nextRunAt = null;
     campaign.updatedAt = new Date().toISOString();

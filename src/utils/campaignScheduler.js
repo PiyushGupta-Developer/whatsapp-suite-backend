@@ -37,23 +37,25 @@ function nextBulkRepeatDate(
     return null;
   }
 
-  // ONE_TIME = koi next run nahi
+  // ONE TIME
   if (repeatType === "ONE_TIME") {
     return null;
   }
 
-  // ==========================================
   // EVERY 15 DAYS
-  // ==========================================
   if (repeatType === "15_DAYS") {
     d.setDate(d.getDate() + 15);
     return d;
   }
 
-  // ==========================================
+  // EVERY 7 DAYS
+  if (repeatType === "WEEKLY") {
+    d.setDate(d.getDate() + 7);
+    return d;
+  }
+
   // MONTHLY - SELECTED MONTHS ONLY
   // One cycle only - next year repeat nahi hoga
-  // ==========================================
   if (repeatType === "MONTHLY") {
     const months = Array.isArray(repeatMonths)
       ? [
@@ -83,12 +85,12 @@ function nextBulkRepeatDate(
       return null;
     }
 
-    // Jo months already complete ho chuke hain unko hata do
+    // Completed months ko remove karo
     const remainingMonths = months.filter(
       (month) => !completed.includes(month),
     );
 
-    // Saare selected months complete ho gaye
+    // Saare selected months complete
     if (!remainingMonths.length) {
       return null;
     }
@@ -99,7 +101,7 @@ function nextBulkRepeatDate(
     const seconds = d.getSeconds();
     const milliseconds = d.getMilliseconds();
 
-    // Current month ke NEXT month se search start
+    // Current month ke next month se search
     let year = d.getFullYear();
     let monthIndex = d.getMonth() + 1;
 
@@ -113,10 +115,10 @@ function nextBulkRepeatDate(
       const monthNumber = monthIndex + 1;
 
       if (remainingMonths.includes(monthNumber)) {
-        // Month ka last valid day
         const lastDay = new Date(year, monthIndex + 1, 0).getDate();
 
-        // Agar selected date is month me valid hai
+        // Example:
+        // 31 date + February => skip February
         if (originalDay <= lastDay) {
           return new Date(
             year,
@@ -213,10 +215,7 @@ async function executeBulkMongoCampaign(campaign) {
     const sent = results.filter((r) => r.ok).length;
     const failed = results.length - sent;
 
-    // ==========================================
-    // NEW BULK RECURRENCE
-    // ==========================================
-
+    // Current run
     const currentRun = new Date(campaign.scheduledAt || new Date());
 
     // Already completed monthly months
@@ -236,7 +235,7 @@ async function executeBulkMongoCampaign(campaign) {
       ? campaign.bulkRepeatMonths.map(Number)
       : [];
 
-    // Current monthly run ko completed mark karo
+    // MONTHLY current month complete
     if (campaign.bulkRepeatType === "MONTHLY") {
       const currentMonth = currentRun.getMonth() + 1;
 
@@ -248,6 +247,7 @@ async function executeBulkMongoCampaign(campaign) {
       }
     }
 
+    // Next run
     const next = nextBulkRepeatDate(
       currentRun,
       campaign.bulkRepeatType,
@@ -257,13 +257,7 @@ async function executeBulkMongoCampaign(campaign) {
 
     const shouldRepeat = !!next;
 
-    // ==========================================
-    // IMPORTANT:
-    // Agar user ne Stop Schedule press kar diya
-    // ho jab campaign Running tha, to Scheduled
-    // dobara mat banana.
-    // ==========================================
-
+    // User ne running ke time stop kiya ho
     const latestCampaign = await Campaign.findById(campaign._id).select(
       "status",
     );
@@ -349,14 +343,21 @@ async function executeBulkMongoCampaign(campaign) {
 
 async function executeBulkMemoryCampaign(campaign) {
   try {
-    const recipients = Array.isArray(campaign.contacts)
+    const contactRecipients = Array.isArray(campaign.contacts)
       ? campaign.contacts
       : [];
+
+    const directRecipients = Array.isArray(campaign.directRecipients)
+      ? campaign.directRecipients
+      : [];
+
+    const recipients = [...contactRecipients, ...directRecipients];
 
     if (!recipients.length) {
       campaign.status = "Failed";
       campaign.failed = campaign.recipients || 0;
       campaign.completedAt = new Date().toISOString();
+
       return;
     }
 
@@ -380,6 +381,7 @@ async function executeBulkMemoryCampaign(campaign) {
       campaign.status = "Failed";
       campaign.failed = items.length;
       campaign.completedAt = new Date().toISOString();
+
       return;
     }
 
@@ -398,12 +400,10 @@ async function executeBulkMemoryCampaign(campaign) {
       results,
     };
 
-    // ==========================================
-    // NEW BULK RECURRENCE
-    // ==========================================
-
+    // Current run
     const currentRun = new Date(campaign.scheduledAt || new Date());
 
+    // Completed monthly months
     let completedMonths = Array.isArray(campaign.bulkRepeatCompletedMonths)
       ? [
           ...new Set(
@@ -420,7 +420,7 @@ async function executeBulkMemoryCampaign(campaign) {
       ? campaign.bulkRepeatMonths.map(Number)
       : [];
 
-    // Current monthly run ko completed mark karo
+    // MONTHLY current month complete
     if (campaign.bulkRepeatType === "MONTHLY") {
       const currentMonth = currentRun.getMonth() + 1;
 
@@ -432,6 +432,7 @@ async function executeBulkMemoryCampaign(campaign) {
       }
     }
 
+    // Next run
     const next = nextBulkRepeatDate(
       currentRun,
       campaign.bulkRepeatType,
@@ -441,10 +442,7 @@ async function executeBulkMemoryCampaign(campaign) {
 
     const shouldRepeat = !!next;
 
-    // ==========================================
-    // Stop Schedule ko respect karo
-    // ==========================================
-
+    // Stop Schedule
     if (campaign.status === "Stopped") {
       campaign.bulkRepeatCompletedMonths = completedMonths;
 

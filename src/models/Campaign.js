@@ -54,7 +54,7 @@ const campaignSchema = new mongoose.Schema(
     // New Bulk Schedule recurrence settings
     bulkRepeatType: {
       type: String,
-      enum: ["ONE_TIME", "15_DAYS", "MONTHLY"],
+      enum: ["ONE_TIME", "15_DAYS", "WEEKLY", "MONTHLY"],
       default: "ONE_TIME",
     },
 
