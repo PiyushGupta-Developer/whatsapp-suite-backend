@@ -140,7 +140,454 @@ function nextBulkRepeatDate(
 
   return null;
 }
+function nextScheduleRepeatDate(
+  date,
+  repeatType,
+  repeatMonths = [],
+  completedMonths = [],
+) {
+  const d = new Date(date);
 
+  if (Number.isNaN(d.getTime())) {
+    return null;
+  }
+
+  if (repeatType === "ONE_TIME") {
+    return null;
+  }
+
+  if (repeatType === "15_DAYS") {
+    d.setUTCDate(d.getUTCDate() + 15);
+    return d;
+  }
+
+  if (repeatType === "WEEKLY") {
+    d.setUTCDate(d.getUTCDate() + 7);
+    return d;
+  }
+
+  if (repeatType !== "MONTHLY") {
+    return null;
+  }
+
+  const selectedMonths = Array.isArray(repeatMonths)
+    ? [
+        ...new Set(
+          repeatMonths
+            .map(Number)
+            .filter(
+              (month) => Number.isInteger(month) && month >= 1 && month <= 12,
+            ),
+        ),
+      ]
+    : [];
+
+  const completed = Array.isArray(completedMonths)
+    ? completedMonths.map(Number)
+    : [];
+
+  const remainingMonths = selectedMonths.filter(
+    (month) => !completed.includes(month),
+  );
+
+  if (!remainingMonths.length) {
+    return null;
+  }
+
+  const originalDay = d.getUTCDate();
+
+  for (let offset = 1; offset <= 12; offset++) {
+    const candidate = new Date(d);
+
+    candidate.setUTCDate(1);
+
+    candidate.setUTCMonth(d.getUTCMonth() + offset);
+
+    const month = candidate.getUTCMonth() + 1;
+
+    if (!remainingMonths.includes(month)) {
+      continue;
+    }
+
+    const lastDay = new Date(
+      Date.UTC(candidate.getUTCFullYear(), candidate.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+
+    if (originalDay > lastDay) {
+      continue;
+    }
+
+    candidate.setUTCDate(originalDay);
+
+    return candidate;
+  }
+
+  return null;
+}
+async function executeScheduleMongoCampaign(campaign) {
+  try {
+    console.log("[Schedule Scheduler] Sending:", String(campaign._id));
+
+    const dbRecipients = await Contact.find({
+      _id: {
+        $in: campaign.contacts || [],
+      },
+      createdBy: campaign.createdBy,
+      status: {
+        $ne: "Unsubscribed",
+      },
+    }).lean();
+
+    const directRecipients = Array.isArray(campaign.directRecipients)
+      ? campaign.directRecipients
+      : [];
+
+    const recipients = [...dbRecipients, ...directRecipients];
+
+    const failCampaign = async (message, failedCount = recipients.length) => {
+      console.error("[Schedule Scheduler]", message, String(campaign._id));
+
+      await Campaign.findOneAndUpdate(
+        {
+          _id: campaign._id,
+          status: "Running",
+        },
+        {
+          $set: {
+            status: "Failed",
+            failed: failedCount,
+            nextRunAt: null,
+            completedAt: new Date(),
+          },
+        },
+      );
+    };
+
+    if (!recipients.length) {
+      await failCampaign("No recipients found", campaign.recipients || 0);
+
+      return;
+    }
+
+    const devices =
+      Array.isArray(campaign.deviceIds) && campaign.deviceIds.length > 0
+        ? campaign.deviceIds
+        : campaign.device
+          ? [campaign.device]
+          : [];
+
+    if (!devices.length) {
+      await failCampaign("No WhatsApp device found");
+
+      return;
+    }
+
+    const items = recipients.map((contact) => ({
+      phone: contact.phone || contact.number,
+      jid: contact.whatsappId || contact.jid,
+      contact,
+      message: campaign.message || "",
+      sendText: campaign.sendText !== false,
+      mediaFiles: campaign.mediaFiles || [],
+    }));
+
+    const result = await messageService.sendBulk(items, devices);
+
+    const results = Array.isArray(result?.results) ? result.results : [];
+
+    const sent = results.filter((item) => item.ok === true).length;
+
+    const failed = Math.max(0, items.length - sent);
+
+    const currentRun = new Date(campaign.scheduledAt);
+
+    if (Number.isNaN(currentRun.getTime())) {
+      await failCampaign("Invalid campaign scheduledAt", failed);
+
+      return;
+    }
+
+    const selectedMonths = Array.isArray(campaign.scheduleRepeatMonths)
+      ? campaign.scheduleRepeatMonths.map(Number)
+      : [];
+
+    const completedMonths = [
+      ...new Set(
+        Array.isArray(campaign.scheduleCompletedMonths)
+          ? campaign.scheduleCompletedMonths.map(Number)
+          : [],
+      ),
+    ];
+
+    if (campaign.scheduleRepeatType === "MONTHLY") {
+      const currentMonth = currentRun.getUTCMonth() + 1;
+
+      if (
+        selectedMonths.includes(currentMonth) &&
+        !completedMonths.includes(currentMonth)
+      ) {
+        completedMonths.push(currentMonth);
+      }
+    }
+
+    let next = nextScheduleRepeatDate(
+      currentRun,
+      campaign.scheduleRepeatType,
+      selectedMonths,
+      completedMonths,
+    );
+
+    if (
+      next &&
+      campaign.endDate &&
+      next.getTime() > new Date(campaign.endDate).getTime()
+    ) {
+      next = null;
+    }
+
+    const shouldRepeat = Boolean(next);
+
+    const updated = await Campaign.findOneAndUpdate(
+      {
+        _id: campaign._id,
+        status: "Running",
+      },
+      {
+        $set: {
+          sent,
+          failed,
+          delivered: 0,
+          read: 0,
+
+          status: shouldRepeat
+            ? "Scheduled"
+            : sent > 0
+              ? "Completed"
+              : "Failed",
+
+          scheduledAt: shouldRepeat ? next : currentRun,
+
+          nextRunAt: shouldRepeat ? next : null,
+
+          scheduleCompletedMonths: completedMonths,
+
+          completedAt: shouldRepeat ? null : new Date(),
+
+          report: {
+            total: items.length,
+            sent,
+            failed,
+            results,
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    if (!updated) {
+      console.log(
+        "[Schedule Scheduler] Campaign status changed:",
+        String(campaign._id),
+      );
+
+      return;
+    }
+
+    console.log(
+      "[Schedule Scheduler] Finished:",
+      String(campaign._id),
+      "Sent:",
+      sent,
+      "Failed:",
+      failed,
+      "Next:",
+      next ? next.toISOString() : "No next run",
+    );
+  } catch (error) {
+    console.error("[Schedule Scheduler] Error:", String(campaign._id), error);
+
+    try {
+      await Campaign.findOneAndUpdate(
+        {
+          _id: campaign._id,
+          status: "Running",
+        },
+        {
+          $set: {
+            status: "Failed",
+            nextRunAt: null,
+            completedAt: new Date(),
+          },
+        },
+      );
+    } catch (updateError) {
+      console.error(
+        "[Schedule Scheduler] Failed to update campaign:",
+        updateError,
+      );
+    }
+  }
+}
+async function executeScheduleMemoryCampaign(campaign) {
+  try {
+    const contactIds = Array.isArray(campaign.contacts)
+      ? campaign.contacts
+      : [];
+
+    const savedContacts = (store.contacts || []).filter(
+      (contact) =>
+        contactIds.some((id) => String(id) === String(contact._id)) &&
+        String(contact.createdBy) === String(campaign.createdBy) &&
+        contact.status !== "Unsubscribed",
+    );
+
+    const directRecipients = Array.isArray(campaign.directRecipients)
+      ? campaign.directRecipients
+      : [];
+
+    const recipients = [...savedContacts, ...directRecipients];
+
+    const devices =
+      Array.isArray(campaign.deviceIds) && campaign.deviceIds.length > 0
+        ? campaign.deviceIds
+        : campaign.device
+          ? [campaign.device]
+          : [];
+
+    if (!recipients.length || !devices.length) {
+      campaign.status = "Failed";
+
+      campaign.failed = recipients.length || campaign.recipients || 0;
+
+      campaign.nextRunAt = null;
+
+      campaign.completedAt = new Date().toISOString();
+
+      return;
+    }
+
+    const items = recipients.map((contact) => ({
+      phone: contact.phone || contact.number,
+
+      jid: contact.whatsappId || contact.jid,
+
+      contact,
+
+      message: campaign.message || "",
+
+      sendText: campaign.sendText !== false,
+
+      mediaFiles: campaign.mediaFiles || [],
+    }));
+
+    const result = await messageService.sendBulk(items, devices);
+
+    const results = Array.isArray(result?.results) ? result.results : [];
+
+    const sent = results.filter((item) => item.ok === true).length;
+
+    const failed = Math.max(0, items.length - sent);
+
+    campaign.sent = sent;
+    campaign.failed = failed;
+
+    campaign.report = {
+      total: items.length,
+      sent,
+      failed,
+      results,
+    };
+
+    if (campaign.status === "Stopped") {
+      campaign.nextRunAt = null;
+
+      campaign.updatedAt = new Date().toISOString();
+
+      return;
+    }
+
+    const currentRun = new Date(campaign.scheduledAt);
+
+    if (Number.isNaN(currentRun.getTime())) {
+      campaign.status = "Failed";
+      campaign.nextRunAt = null;
+
+      campaign.completedAt = new Date().toISOString();
+
+      return;
+    }
+
+    const selectedMonths = Array.isArray(campaign.scheduleRepeatMonths)
+      ? campaign.scheduleRepeatMonths.map(Number)
+      : [];
+
+    const completedMonths = [
+      ...new Set(
+        Array.isArray(campaign.scheduleCompletedMonths)
+          ? campaign.scheduleCompletedMonths.map(Number)
+          : [],
+      ),
+    ];
+
+    if (campaign.scheduleRepeatType === "MONTHLY") {
+      const currentMonth = currentRun.getUTCMonth() + 1;
+
+      if (
+        selectedMonths.includes(currentMonth) &&
+        !completedMonths.includes(currentMonth)
+      ) {
+        completedMonths.push(currentMonth);
+      }
+    }
+
+    let next = nextScheduleRepeatDate(
+      currentRun,
+      campaign.scheduleRepeatType,
+      selectedMonths,
+      completedMonths,
+    );
+
+    if (
+      next &&
+      campaign.endDate &&
+      next.getTime() > new Date(campaign.endDate).getTime()
+    ) {
+      next = null;
+    }
+
+    campaign.scheduleCompletedMonths = completedMonths;
+
+    campaign.status = next ? "Scheduled" : sent > 0 ? "Completed" : "Failed";
+
+    campaign.scheduledAt = next ? next.toISOString() : campaign.scheduledAt;
+
+    campaign.nextRunAt = next ? next.toISOString() : null;
+
+    campaign.completedAt = next ? null : new Date().toISOString();
+
+    campaign.updatedAt = new Date().toISOString();
+
+    console.log(
+      "[Schedule Scheduler] Memory finished:",
+      String(campaign._id),
+      "Next:",
+      next ? next.toISOString() : "No next run",
+    );
+  } catch (error) {
+    console.error("[Schedule Scheduler] Memory error:", error);
+
+    if (campaign.status !== "Stopped") {
+      campaign.status = "Failed";
+
+      campaign.nextRunAt = null;
+
+      campaign.completedAt = new Date().toISOString();
+    }
+  }
+}
 async function executeBulkMongoCampaign(campaign) {
   try {
     console.log("[Bulk Scheduler] Sending campaign:", campaign._id.toString());
@@ -785,6 +1232,14 @@ async function tick() {
 
 if (lockedCampaign.isBulkSchedule === true) {
   await executeBulkMongoCampaign(lockedCampaign);
+} else if (
+  ["15_DAYS", "WEEKLY", "MONTHLY"].includes(
+    lockedCampaign.scheduleRepeatType,
+  ) ||
+  (lockedCampaign.scheduleRepeatType === "ONE_TIME" &&
+    lockedCampaign.repeat === "No Repeat")
+) {
+  await executeScheduleMongoCampaign(lockedCampaign);
 } else {
   await executeMongoCampaign(lockedCampaign);
 }
@@ -822,6 +1277,14 @@ if (lockedCampaign.isBulkSchedule === true) {
 
       if (campaign.isBulkSchedule === true) {
         await executeBulkMemoryCampaign(campaign);
+      } else if (
+        ["15_DAYS", "WEEKLY", "MONTHLY"].includes(
+          campaign.scheduleRepeatType,
+        ) ||
+        (campaign.scheduleRepeatType === "ONE_TIME" &&
+          campaign.repeat === "No Repeat")
+      ) {
+        await executeScheduleMemoryCampaign(campaign);
       } else {
         await executeMemoryCampaign(campaign);
       }

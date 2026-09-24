@@ -474,6 +474,537 @@ console.log("Final media files:", finalMediaFiles);
     });
   }
 };
+
+
+exports.createSchedule = async (req, res) => {
+  try {
+    const {
+      name,
+      message = "",
+      mediaFiles = [],
+      recipients,
+      contacts,
+      contactIds,
+      deviceId,
+      deviceIds,
+      scheduledAt,
+      timezone = "Asia/Kolkata",
+      sendText = true,
+      scheduleRepeatType = "ONE_TIME",
+      scheduleRepeatMonths = [],
+      endDate,
+    } = req.body;
+
+    const allowedTypes = ["ONE_TIME", "15_DAYS", "WEEKLY", "MONTHLY"];
+
+    if (!allowedTypes.includes(scheduleRepeatType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid scheduleRepeatType",
+      });
+    }
+
+    const parsedMonths = parseJsonField(scheduleRepeatMonths, []);
+
+    if (!Array.isArray(parsedMonths)) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduleRepeatMonths must be an array",
+      });
+    }
+
+    const months = [...new Set(parsedMonths.map(Number))].sort((a, b) => a - b);
+
+    if (
+      months.some(
+        (month) => !Number.isInteger(month) || month < 1 || month > 12,
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Months must be between 1 and 12",
+      });
+    }
+
+    if (scheduleRepeatType === "MONTHLY" && months.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Select at least one month",
+      });
+    }
+
+    if (scheduleRepeatType !== "MONTHLY" && months.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduleRepeatMonths is only allowed for MONTHLY",
+      });
+    }
+
+    const parseScheduleDate = (value) => {
+      if (typeof value !== "string") {
+        return null;
+      }
+
+      const input = value.trim();
+
+      const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(input);
+
+      if (!hasTimezone || !/^\d{4}-\d{2}-\d{2}T/.test(input)) {
+        return null;
+      }
+
+      const date = new Date(input);
+
+      return Number.isNaN(date.getTime()) ? null : date;
+    };
+
+    if (!scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduledAt is required",
+      });
+    }
+
+    let scheduledDate = parseScheduleDate(scheduledAt);
+
+    if (!scheduledDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid scheduledAt. Include timezone offset, e.g. 2026-10-15T10:00:00+05:30",
+      });
+    }
+
+    if (scheduledDate.getTime() <= Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduledAt must be in the future",
+      });
+    }
+
+    let parsedEndDate = null;
+
+    if (endDate) {
+      parsedEndDate = parseScheduleDate(endDate);
+
+      if (!parsedEndDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid endDate. Include timezone offset",
+        });
+      }
+
+      if (parsedEndDate.getTime() <= scheduledDate.getTime()) {
+        return res.status(400).json({
+          success: false,
+          message: "endDate must be after scheduledAt",
+        });
+      }
+    }
+
+    if (scheduleRepeatType === "ONE_TIME" && parsedEndDate) {
+      return res.status(400).json({
+        success: false,
+        message: "endDate is only allowed for recurring schedules",
+      });
+    }
+
+    if (scheduleRepeatType === "MONTHLY") {
+      const originalDay = scheduledDate.getUTCDate();
+
+      let firstDate = null;
+
+      for (let offset = 0; offset < 12; offset++) {
+        const candidate = new Date(scheduledDate);
+
+        candidate.setUTCDate(1);
+
+        candidate.setUTCMonth(scheduledDate.getUTCMonth() + offset);
+
+        const month = candidate.getUTCMonth() + 1;
+
+        if (!months.includes(month)) {
+          continue;
+        }
+
+        const daysInMonth = new Date(
+          Date.UTC(candidate.getUTCFullYear(), candidate.getUTCMonth() + 1, 0),
+        ).getUTCDate();
+
+        if (originalDay > daysInMonth) {
+          continue;
+        }
+
+        candidate.setUTCDate(originalDay);
+
+        if (candidate.getTime() >= scheduledDate.getTime()) {
+          firstDate = candidate;
+          break;
+        }
+      }
+
+      if (!firstDate) {
+        return res.status(400).json({
+          success: false,
+          message: "No valid selected month found",
+        });
+      }
+
+      scheduledDate = firstDate;
+    }
+
+    if (parsedEndDate && scheduledDate.getTime() > parsedEndDate.getTime()) {
+      return res.status(400).json({
+        success: false,
+        message: "First scheduled date exceeds endDate",
+      });
+    }
+
+    const parsedRecipients = parseJsonField(recipients, []);
+
+    const parsedContacts = parseJsonField(contacts, []);
+
+    const parsedContactIds = parseJsonField(contactIds, []);
+
+    if (
+      !Array.isArray(parsedRecipients) ||
+      !Array.isArray(parsedContacts) ||
+      !Array.isArray(parsedContactIds)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Recipients and contacts must be arrays",
+      });
+    }
+
+    const recipientInput =
+      parsedRecipients.length > 0
+        ? parsedRecipients
+        : parsedContacts.length > 0
+          ? parsedContacts
+          : parsedContactIds;
+
+    const list = await expandRecipients(
+      {
+        ...req.body,
+        recipients: recipientInput,
+      },
+      req.user._id,
+    );
+
+    if (!Array.isArray(list) || list.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one recipient is required",
+      });
+    }
+
+    let ids = parseJsonField(deviceIds, []);
+
+    if (!Array.isArray(ids)) {
+      return res.status(400).json({
+        success: false,
+        message: "deviceIds must be an array",
+      });
+    }
+
+    if (ids.length === 0 && deviceId) {
+      ids = [deviceId];
+    }
+
+    ids = [...new Set(ids.filter(Boolean).map(String))];
+
+    if (ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one WhatsApp device is required",
+      });
+    }
+
+    const existingMedia = parseJsonField(mediaFiles, []);
+
+    if (!Array.isArray(existingMedia)) {
+      return res.status(400).json({
+        success: false,
+        message: "mediaFiles must be an array",
+      });
+    }
+
+    const uploadedMedia = (req.files || []).map((file) => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      path: `/uploads/${file.filename}`,
+      type: file.mimetype.startsWith("image/")
+        ? "Image"
+        : file.mimetype.startsWith("video/")
+          ? "Video"
+          : file.mimetype.startsWith("audio/")
+            ? "Audio"
+            : "Document",
+    }));
+
+    const finalMediaFiles = [...existingMedia, ...uploadedMedia];
+
+    if (!String(message || "").trim() && finalMediaFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Message or mediaFiles required",
+      });
+    }
+
+    const mongoConnected = isMongoConnected();
+
+    const dbContactIds = mongoConnected
+      ? list.map((contact) => contact._id).filter(Boolean)
+      : [];
+
+    const directRecipients = list
+      .filter((contact) => !mongoConnected || !contact._id)
+      .map((contact) => ({
+        name: contact.name || "",
+        phone: contact.phone || contact.number || "",
+        whatsappId: contact.whatsappId || contact.jid || "",
+      }))
+      .filter((contact) => contact.phone || contact.whatsappId);
+
+    const campaign = await persistCampaign(
+      {
+        name: name || `Schedule ${new Date().toISOString()}`,
+
+        message,
+
+        sendText: sendText !== false && sendText !== "false",
+
+        mediaFiles: finalMediaFiles,
+
+        recipients: list.length,
+
+        sent: 0,
+        delivered: 0,
+        read: 0,
+        failed: 0,
+
+        contacts: dbContactIds,
+
+        directRecipients,
+
+        device: ids[0],
+        deviceIds: ids,
+
+        scheduledAt: scheduledDate,
+        nextRunAt: scheduledDate,
+
+        timezone,
+
+        repeat: "No Repeat",
+
+        endDate: parsedEndDate,
+
+        scheduleRepeatType,
+
+        scheduleRepeatMonths: months,
+
+        scheduleCompletedMonths: [],
+
+        isBulkSchedule: false,
+
+        status: "Scheduled",
+
+        estimatedTimeMinutes: Math.ceil(
+          list.length / Math.max(1, ids.length) / 80,
+        ),
+      },
+      req,
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Campaign scheduled successfully",
+      campaign,
+    });
+  } catch (error) {
+    console.error("[Create Schedule] error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+exports.stopSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const scheduleId = req.params.id;
+
+    if (!scheduleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Schedule ID is required",
+      });
+    }
+
+    const recurringTypes = ["15_DAYS", "WEEKLY", "MONTHLY"];
+
+    if (isMongoConnected()) {
+      if (!Campaign.db.base.Types.ObjectId.isValid(scheduleId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid schedule ID",
+        });
+      }
+
+      const campaign = await Campaign.findOne({
+        _id: scheduleId,
+        createdBy: userId,
+        isBulkSchedule: false,
+        scheduleRepeatType: {
+          $in: recurringTypes,
+        },
+      });
+
+      if (!campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Recurring schedule not found",
+        });
+      }
+
+      if (campaign.status === "Stopped") {
+        return res.status(400).json({
+          success: false,
+          message: "Schedule is already stopped",
+        });
+      }
+
+      if (campaign.status === "Completed") {
+        return res.status(400).json({
+          success: false,
+          message: "Schedule is already completed",
+        });
+      }
+
+      if (campaign.status === "Running") {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Schedule is currently running. Stop it after the current run finishes.",
+        });
+      }
+
+      if (campaign.status !== "Scheduled") {
+        return res.status(400).json({
+          success: false,
+          message: "Only scheduled campaigns can be stopped",
+        });
+      }
+
+      const stopped = await Campaign.findOneAndUpdate(
+        {
+          _id: campaign._id,
+          createdBy: userId,
+          isBulkSchedule: false,
+          scheduleRepeatType: {
+            $in: recurringTypes,
+          },
+          status: "Scheduled",
+        },
+        {
+          $set: {
+            status: "Stopped",
+            nextRunAt: null,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!stopped) {
+        return res.status(409).json({
+          success: false,
+          message: "Schedule status changed. Please try again.",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Schedule stopped successfully",
+        campaign: stopped,
+      });
+    }
+
+    await init();
+
+    const campaign = (store.campaigns || []).find(
+      (item) =>
+        String(item._id) === String(scheduleId) &&
+        String(item.createdBy) === String(userId) &&
+        item.isBulkSchedule === false &&
+        recurringTypes.includes(item.scheduleRepeatType),
+    );
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: "Recurring schedule not found",
+      });
+    }
+
+    if (campaign.status === "Stopped") {
+      return res.status(400).json({
+        success: false,
+        message: "Schedule is already stopped",
+      });
+    }
+
+    if (campaign.status === "Completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Schedule is already completed",
+      });
+    }
+
+    if (campaign.status === "Running") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Schedule is currently running. Stop it after the current run finishes.",
+      });
+    }
+
+    if (campaign.status !== "Scheduled") {
+      return res.status(400).json({
+        success: false,
+        message: "Only scheduled campaigns can be stopped",
+      });
+    }
+
+    campaign.status = "Stopped";
+
+    campaign.nextRunAt = null;
+
+    campaign.updatedAt = new Date().toISOString();
+
+    return res.status(200).json({
+      success: true,
+      message: "Schedule stopped successfully",
+      campaign,
+    });
+  } catch (error) {
+    console.error("[Stop Schedule] error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 exports.bulkSchedule = async (req, res) => {
   try {
     const {

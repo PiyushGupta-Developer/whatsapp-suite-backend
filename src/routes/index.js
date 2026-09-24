@@ -246,12 +246,25 @@ router.post(
 // ================================
 // SCHEDULE API
 // ================================
+// router.post(
+//   '/schedule',
+//   protect,
+//   authorize('Administrator', 'Manager', 'Operator'),
+//   media.upload.array('files', 10),
+//   h(campaigns.createCampaign, 'schedule')
+// );
 router.post(
-  '/schedule',
+  "/schedule",
   protect,
-  authorize('Administrator', 'Manager', 'Operator'),
-  media.upload.array('files', 10),
-  h(campaigns.createCampaign, 'schedule')
+  authorize("Administrator", "Manager", "Operator"),
+  media.upload.array("files", 10),
+  h(campaigns.createSchedule, "schedule"),
+);
+router.post(
+  "/schedule/:id/stop",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  h(campaigns.stopSchedule, "stopSchedule"),
 );
 // ================================
 // GET ALL SCHEDULES

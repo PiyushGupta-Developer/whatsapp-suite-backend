@@ -51,6 +51,22 @@ const campaignSchema = new mongoose.Schema(
     },
     endDate: { type: Date },
     nextRunAt: { type: Date },
+    // Normal Schedule recurrence
+    scheduleRepeatType: {
+      type: String,
+      enum: ["ONE_TIME", "15_DAYS", "WEEKLY", "MONTHLY"],
+      default: "ONE_TIME",
+    },
+
+    scheduleRepeatMonths: {
+      type: [Number],
+      default: [],
+    },
+
+    scheduleCompletedMonths: {
+      type: [Number],
+      default: [],
+    },
     // New Bulk Schedule recurrence settings
     bulkRepeatType: {
       type: String,
