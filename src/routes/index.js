@@ -308,18 +308,18 @@ router.put(
 // ================================
 
 router.delete(
+  "/schedule/multi-delete",
+  protect,
+  authorize("Administrator", "Manager", "Operator"),
+  h(campaigns.multiDeleteSchedule, "schedule.multiDelete"),
+);
+router.delete(
   '/schedule/:id',
   protect,
   authorize('Administrator', 'Manager', 'Operator'),
   h(campaigns.deleteSchedule, 'schedule.delete')
 );
 
-router.delete(
-  "/schedule/multi-delete",
-  protect,
-  authorize("Administrator", "Manager", "Operator"),
-  h(campaigns.multiDeleteSchedule, "schedule.multiDelete"),
-);
 // ================================
 // BULK API
 // ================================
