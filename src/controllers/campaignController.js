@@ -2320,13 +2320,22 @@ exports.getReports = async (req, res) => {
 // GET ALL SCHEDULES
 // GET /schedule
 // ============================================================
+
 exports.getSchedules = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status } = req.query;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 10),
+    );
 
     const filter = {
       createdBy: userId,
+      isBulkSchedule: false,
       scheduledAt: { $ne: null },
     };
 
@@ -2338,15 +2347,12 @@ exports.getSchedules = async (req, res) => {
     // MONGODB
     // ===============================
     if (isMongoConnected()) {
-      const p = Math.max(1, parseInt(page, 10));
-      const l = Math.min(100, Math.max(1, parseInt(limit, 10)));
-
       const [schedules, total] = await Promise.all([
         Campaign.find(filter)
           .populate("device deviceIds contacts")
-          .sort({ scheduledAt: -1 })
-          .skip((p - 1) * l)
-          .limit(l),
+          .sort({ createdAt: -1, _id: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit),
 
         Campaign.countDocuments(filter),
       ]);
@@ -2355,8 +2361,9 @@ exports.getSchedules = async (req, res) => {
         success: true,
         count: schedules.length,
         total,
-        page: p,
-        pages: Math.ceil(total / l),
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
         data: schedules,
       });
     }
@@ -2369,29 +2376,43 @@ exports.getSchedules = async (req, res) => {
     let schedules = store.campaigns.filter(
       (campaign) =>
         String(campaign.createdBy) === String(userId) &&
-        campaign.scheduledAt
+        campaign.isBulkSchedule !== true &&
+        campaign.scheduledAt,
     );
 
     if (status && status !== "All Status") {
-      schedules = schedules.filter(
-        (campaign) => campaign.status === status
-      );
+      schedules = schedules.filter((campaign) => campaign.status === status);
     }
 
-    schedules.sort(
-      (a, b) =>
-        new Date(b.scheduledAt) - new Date(a.scheduledAt)
+    // NEWEST CREATED SCHEDULE FIRST
+    schedules.sort((a, b) => {
+      const dateA = new Date(a.createdAt || 0).getTime();
+
+      const dateB = new Date(b.createdAt || 0).getTime();
+
+      if (dateB !== dateA) {
+        return dateB - dateA;
+      }
+
+      return String(b._id).localeCompare(String(a._id));
+    });
+
+    const total = schedules.length;
+
+    const paginatedSchedules = schedules.slice(
+      (page - 1) * limit,
+      page * limit,
     );
 
     return res.status(200).json({
       success: true,
-      count: schedules.length,
-      total: schedules.length,
-      page: 1,
-      pages: 1,
-      data: schedules,
+      count: paginatedSchedules.length,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+      data: paginatedSchedules,
     });
-
   } catch (error) {
     console.error("[Schedule] getSchedules error:", error);
 
@@ -2830,6 +2851,121 @@ exports.deleteSchedule = async (req, res) => {
 
   } catch (error) {
     console.error("[Schedule] deleteSchedule error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.multiDeleteSchedule = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { scheduleIds } = req.body;
+
+    if (!Array.isArray(scheduleIds) || scheduleIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "scheduleIds must be a non-empty array",
+      });
+    }
+
+    const ids = [...new Set(scheduleIds.map(String))];
+
+    if (ids.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum 100 schedules can be deleted at once",
+      });
+    }
+
+    if (isMongoConnected()) {
+      const mongoose = Campaign.db.base;
+
+      if (ids.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more schedule IDs are invalid",
+        });
+      }
+
+      const schedules = await Campaign.find({
+        _id: { $in: ids },
+        createdBy: userId,
+        isBulkSchedule: false,
+        scheduledAt: { $ne: null },
+      }).select("_id status");
+
+      const foundIds = schedules.map((s) => String(s._id));
+
+      const notFoundIds = ids.filter((id) => !foundIds.includes(id));
+
+      const runningIds = schedules
+        .filter((s) => s.status === "Running")
+        .map((s) => String(s._id));
+
+      const deletableIds = schedules
+        .filter((s) => s.status !== "Running")
+        .map((s) => s._id);
+
+      const result = await Campaign.deleteMany({
+        _id: { $in: deletableIds },
+        createdBy: userId,
+        isBulkSchedule: false,
+        scheduledAt: { $ne: null },
+        status: { $ne: "Running" },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `${result.deletedCount} schedules deleted successfully`,
+        requestedCount: ids.length,
+        deletedCount: result.deletedCount,
+        skippedRunningIds: runningIds,
+        notFoundIds,
+      });
+    }
+
+    await init();
+
+    const notFoundIds = [];
+    const runningIds = [];
+    let deletedCount = 0;
+
+    for (const id of ids) {
+      const index = store.campaigns.findIndex(
+        (campaign) =>
+          String(campaign._id) === id &&
+          String(campaign.createdBy) === String(userId) &&
+          campaign.isBulkSchedule === false &&
+          campaign.scheduledAt,
+      );
+
+      if (index === -1) {
+        notFoundIds.push(id);
+        continue;
+      }
+
+      if (store.campaigns[index].status === "Running") {
+        runningIds.push(id);
+        continue;
+      }
+
+      store.campaigns.splice(index, 1);
+      deletedCount++;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${deletedCount} schedules deleted successfully`,
+      requestedCount: ids.length,
+      deletedCount,
+      skippedRunningIds: runningIds,
+      notFoundIds,
+    });
+  } catch (error) {
+    console.error("[Schedule] multiDeleteSchedule error:", error);
 
     return res.status(500).json({
       success: false,
