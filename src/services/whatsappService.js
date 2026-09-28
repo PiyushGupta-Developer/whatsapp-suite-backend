@@ -2055,7 +2055,8 @@
 
 const path = require('path');
 const fs = require('fs');
-
+const mongoose = require("mongoose");
+const Device = require("../models/Device");
 // ============================================================
 // BAILEYS IMPORTS
 // ============================================================
@@ -2193,7 +2194,35 @@ if (
     }
   );
 }
+async function updateDeviceStatus(deviceId, status, phone = null) {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      console.warn("[WA] MongoDB is not connected");
+      return;
+    }
 
+    const update = {
+      status,
+      isActive: status === "Online",
+      lastSeen: new Date(),
+    };
+
+    if (phone) {
+      update.phoneNumber = `+${phone}`;
+    }
+
+    const result = await Device.updateOne({ _id: deviceId }, { $set: update });
+
+    console.log(
+      `[WA] MongoDB status updated: ${deviceId}`,
+      status,
+      "Matched:",
+      result.matchedCount,
+    );
+  } catch (error) {
+    console.error("[WA] MongoDB status update error:", error.message);
+  }
+}
 // ============================================================
 // SESSION MAP
 // ============================================================
@@ -3003,6 +3032,7 @@ async function handleConnectionUpdate(
       session.phone =
         null;
     }
+    await updateDeviceStatus(id, "Online", session.phone);
 
     // --------------------------------------------------------
     // AUTHENTICATED
@@ -3125,6 +3155,7 @@ async function handleConnectionUpdate(
 
     session.status =
       'Offline';
+    await updateDeviceStatus(id, "Offline");
 
     session.sock =
       null;
@@ -3246,7 +3277,8 @@ async function handleConnectionUpdate(
       console.log(
         `[WA] Restart required: ${id}`
       );
-
+session.status = "Connecting";
+await updateDeviceStatus(id, "Connecting");
       emit(
         'device_update',
         {
