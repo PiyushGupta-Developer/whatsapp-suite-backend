@@ -152,7 +152,7 @@ async function executeCampaign(campaign, recipients) {
         read: 0,
         failed,
         recipients: items.length,
-        status: failed === items.length ? "Failed" : "Completed",
+        status: failed === items.length ? "Failed" : "Delivered",
         completedAt: new Date(),
         report: { total: items.length, sent, failed, results: result.results },
       },
@@ -165,7 +165,7 @@ async function executeCampaign(campaign, recipients) {
   campaign.delivered = 0;
   campaign.read = 0;
   campaign.failed = failed;
-  campaign.status = failed === items.length ? "Failed" : "Completed";
+  campaign.status = failed === items.length ? "Failed" : "Delivered";
   campaign.completedAt = new Date().toISOString();
   campaign.report = {
     total: items.length,
@@ -881,10 +881,10 @@ exports.stopSchedule = async (req, res) => {
         });
       }
 
-      if (campaign.status === "Completed") {
+      if (campaign.status === "Delivered") {
         return res.status(400).json({
           success: false,
-          message: "Schedule is already completed",
+          message: "Schedule is already Delivered",
         });
       }
 
@@ -963,10 +963,10 @@ exports.stopSchedule = async (req, res) => {
       });
     }
 
-    if (campaign.status === "Completed") {
+    if (campaign.status === "Delivered") {
       return res.status(400).json({
         success: false,
-        message: "Schedule is already completed",
+        message: "Schedule is already Delivered",
       });
     }
 
@@ -1397,11 +1397,6 @@ exports.stopBulkSchedule = async (req, res) => {
   try {
     const userId = req.user._id;
     const scheduleId = req.params.id;
-
-    // ============================================================
-    // MONGODB
-    // ============================================================
-
     if (isMongoConnected()) {
       const campaign = await Campaign.findOne({
         _id: scheduleId,
@@ -1432,10 +1427,10 @@ exports.stopBulkSchedule = async (req, res) => {
       }
 
       // Already completed
-      if (campaign.status === "Completed") {
+      if (campaign.status === "Delivered") {
         return res.status(400).json({
           success: false,
-          message: "Bulk schedule is already completed",
+          message: "Bulk schedule is already Delivered",
         });
       }
 
@@ -1488,10 +1483,10 @@ exports.stopBulkSchedule = async (req, res) => {
     }
 
     // Already completed
-    if (campaign.status === "Completed") {
+    if (campaign.status === "Delivered") {
       return res.status(400).json({
         success: false,
-        message: "Bulk schedule is already completed",
+        message: "Bulk schedule is already Delivered",
       });
     }
 
@@ -2316,10 +2311,6 @@ exports.getReports = async (req, res) => {
     });
   }
 };
-// ============================================================
-// GET ALL SCHEDULES
-// GET /schedule
-// ============================================================
 
 exports.getSchedules = async (req, res) => {
   try {
@@ -2423,11 +2414,6 @@ exports.getSchedules = async (req, res) => {
   }
 };
 
-
-// ============================================================
-// GET SINGLE SCHEDULE
-// GET /schedule/:id
-// ============================================================
 exports.getSchedule = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -2489,23 +2475,12 @@ exports.getSchedule = async (req, res) => {
     });
   }
 };
-
-
-// ============================================================
-// UPDATE SCHEDULE
-// PUT /schedule/:id
-// ============================================================
 exports.updateSchedule = async (req, res) => {
   try {
     const userId = req.user._id;
     const scheduleId = req.params.id;
-
-    // Security
     delete req.body.createdBy;
 
-    // ===============================
-    // MONGODB
-    // ===============================
     if (isMongoConnected()) {
 
       const existingSchedule = await Campaign.findOne({
@@ -2524,11 +2499,11 @@ exports.updateSchedule = async (req, res) => {
       // Running / Completed ko edit nahi karenge
       if (
         existingSchedule.status === "Running" ||
-        existingSchedule.status === "Completed"
+        existingSchedule.status === "Delivered"
       ) {
         return res.status(400).json({
           success: false,
-          message: "Running or completed schedule cannot be edited",
+          message: "Running or delivered schedule cannot be edited",
         });
       }
 
@@ -2787,12 +2762,6 @@ exports.updateSchedule = async (req, res) => {
     });
   }
 };
-
-
-// ============================================================
-// DELETE SCHEDULE
-// DELETE /schedule/:id
-// ============================================================
 exports.deleteSchedule = async (req, res) => {
   try {
     const userId = req.user._id;
